@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "taglish-listener": {
+      "command": "python",
+      "args": [
+        "-m",
+        "taglish_listener",
+        "serve",
+        "--transport",
+        "stdio",
+        "--replay",
+        "--transcriber",
+        "scripted",
+        "--spark",
+        "auto",
+        "--segmenter",
+        "auto"
+      ]
+    }
+  }
+}

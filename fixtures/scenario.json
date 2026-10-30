@@ -1,0 +1,43 @@
+{
+  "id": "bayanipay-phase-pull",
+  "title": "BayaniPay kickoff — staged mock",
+  "consent": "Fictional client. Synthesized voices. No real meeting was recorded, and nothing joins the Teams call.",
+  "prd": "fixtures/prd/bayanipay.md",
+  "utterances": [
+    {
+      "id": "u1",
+      "speaker": "Them",
+      "audio": "fixtures/audio/01-them-phase.wav",
+      "text": "Hi, thanks for jumping on. Pwede ba nating i-pull yung payment integration into Phase 1? Kailangan namin yung card checkout bago mag-launch."
+    },
+    {
+      "id": "u2",
+      "speaker": "Me",
+      "audio": "fixtures/audio/02-me-check.wav",
+      "text": "Phase 1 sa PRD is onboarding and KYC lang. I-check ko muna with product bago ako mag-commit."
+    },
+    {
+      "id": "u3",
+      "speaker": "Them",
+      "audio": "fixtures/audio/03-them-screen.wav",
+      "text": "Sharing my screen na. Yung nasa taas, i-adjust natin yung number. Gusto ng finance namin na 2.9 percent processing fee."
+    },
+    {
+      "id": "u4",
+      "speaker": "Me",
+      "audio": "fixtures/audio/04-me-confirm.wav",
+      "text": "Noted. I-confirm ko yung fee change kay finance, and kung papasok ba talaga sa Phase 1."
+    }
+  ],
+  "frames": [
+    {"id": "wait", "at": "u1", "path": "fixtures/frames/01-waiting.png"},
+    {"id": "share", "at": "u3", "path": "fixtures/frames/02-share-fee.png"},
+    {"id": "highlight", "at": "u3", "path": "fixtures/frames/03-share-highlight.png"},
+    {"id": "duplicate", "at": "u3", "path": "fixtures/frames/03-share-highlight.png"}
+  ],
+  "eval": {
+    "audio": "fixtures/eval/taglish.wav",
+    "reference": "fixtures/eval/reference.txt",
+    "text": "Pwede ba nating i-pull yung payment integration into Phase 1?"
+  }
+}
