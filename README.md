@@ -1,51 +1,45 @@
 # Taglish scope guard
 
-Headless listener for Taglish client calls. It does not join Microsoft Teams. A capture process on the user's PC records the mic and the system audio as separate streams, labeled Me and Them, and keeps screen frames that actually changed. The MCP server holds the live meeting state. Whichever assistant connects is the brain. For the hackathon that brain is Muse Spark. The same server is a personal plugin for any other MCP client.
+**Pitch:** This is not a recorder. It holds one meeting's live state, flags the moment you are about to agree to something the PRD forbids, and deletes that state when the call is over.
 
-**Pitch:** A headless Taglish scope guard. Your laptop hears you and the client as separate streams, watches the shared screen, and any assistant flags a PRD conflict before you say yes.
+The state is the product: PRD sections, Me and Them turns, commitments (who, what, when), open items, and the last frame that actually changed. A conflict card is pushed onto the panel on its own, while the line is still going or in the instant after it ends. It cites the PRD section and carries a crop of the screen region as evidence. You do not query for it.
 
-This is not a RAG app. The PRD is a short markdown file passed in full into the Muse Spark prompt. There is no vector index and no retrieval step.
+For the hackathon the brain that writes the cards is Muse Spark. Any other MCP client can sit in the same chair. The PRD markdown is passed in full with the turn. There is no vector index.
 
-## Consent
+## Consent and retention
 
-The bundled demo is a staged mock meeting. BayaniPay is fictional. The voices are synthesized with espeak-ng. Nothing joins a Teams call, and no real client was recorded. Live capture on your own PC records the microphone and the system audio. Tell everyone on the call before you turn it on.
+The bundled demo is a staged mock meeting. BayaniPay is fictional. The voices are synthesized. Nothing joins a Teams call, and no real client was recorded.
+
+Live use still needs the people on the call to know a transcript is being made. Raw audio is not stored. Older frames are dropped. `delete_meeting_state` (or the Delete button, or `python -m taglish_listener delete`) wipes turns, cards, commitments, open items, and the last frame.
+
+Another tool that already watches a screen, such as Screenpipe, can feed this same state. This layer is the guard, not the tape.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph pc [Windows PC]
-    Mic[Mic stream Me]
-    Loop[WASAPI loopback Them]
-    Screen[Screen about 1 fps]
-  end
-  Mic --> Gate[Change detect and turn finish]
-  Loop --> Gate
-  Screen --> Gate
-  Gate --> ASR[Transcriber]
-  ASR --> State[Live meeting state]
-  PRD[PRD markdown] --> Spark[Spark loop]
-  State --> Spark
-  Screen --> Crop[Deictic crop]
-  Spark --> Cards[PRD conflict, commitment, reply]
-  Crop --> Cards
+  Feed[Turns plus the latest frame] --> State[Meeting state]
+  PRD[PRD sections] --> State
+  State --> Push[push_suggestion]
+  Push --> Cards[Conflict, commitment, reply]
   Cards --> State
-  State --> MCP[MCP stdio and streamable HTTP]
-  MCP --> Brain[Assistant brain]
   State --> Panel[Side panel]
+  State --> MCP[MCP stdio and streamable HTTP]
+  MCP --> Brain[Assistant]
+  Delete[delete meeting state] --> State
 ```
-
-Separate streams are the whole trick: the mic is you, the speaker loopback is them, so the listener does not have to guess who is talking.
 
 Card types, and only these three:
 
 | Type | What it means |
 | --- | --- |
-| `PRD_CONFLICT` | The line disagrees with the PRD. `prd_section` is the heading it cites. |
-| `COMMITMENT` | Someone promised a next step. `who` and `what` say so. |
+| `PRD_CONFLICT` | Pushed without a query. Cites `prd_section` and attaches the screen region. |
+| `COMMITMENT` | Who promised what, and when. |
 | `SUGGESTED_REPLY` | One natural Taglish line the user can say. |
 
-`latency_ms` is the wall time from the triggering utterance finishing to that card landing in state.
+`what_did_i_miss` is a small side tool. It reads the open items and promises. It does not create a fourth card.
+
+`latency_ms` on each card is the time from the end of the triggering utterance to the card. The target is under 5 seconds. `get_live_context` also returns `latency.p50_ms` and `latency.p95_ms`. A card pushed while the person is still talking is stamped near 0 ms once the line ends, because it was already on the panel.
 
 ## Run the staged demo
 
@@ -83,9 +77,9 @@ python -m taglish_listener serve --replay --transcriber muse --spark muse --segm
 
 `META_API_KEY` is accepted as an alias. The official name in Meta's docs is `MODEL_API_KEY`.
 
-## Windows live capture
+## Feeding a live call on Windows
 
-Live mode does not join the meeting. It listens on the PC.
+Live mode does not join the meeting. It turns the call into meeting state and drops the audio after each turn is text.
 
 ```powershell
 python -m venv .venv
@@ -110,10 +104,12 @@ Tools:
 
 | Tool | Returns |
 | --- | --- |
-| `get_live_context` | Transcript window, recent cards, screen deltas, backend names |
-| `get_latest_frame` | Newest changed frame as an image |
-| `get_cards` | Cards, including `latency_ms` |
-| `push_suggestion` | Writes a card from the assistant onto the panel |
+| `push_suggestion` | The hero. Lands a card on the panel without anyone asking. Conflicts from the guard use this same door. |
+| `get_live_context` | Meeting state, recent cards, the last frame, and latency p50/p95 |
+| `get_latest_frame` | The one changed frame still kept |
+| `get_cards` | The three card types, each with `latency_ms` |
+| `what_did_i_miss` | A short side summary of open items and promises |
+| `delete_meeting_state` | Wipes the meeting |
 
 Stdio, for any local MCP client. Set the working directory to this repo. See `examples/mcp.json`.
 
@@ -144,7 +140,9 @@ python -m taglish_listener serve --replay --port 8747
 }
 ```
 
-The side panel is not an MCP client. It reads the same meeting state over `GET /panel/state`, proxied by Next.js at `/listener/state`.
+The side panel is not an MCP client. It reads the same meeting state over `GET /panel/state`, proxied by Next.js at `/listener/state`. Delete on the panel calls `POST /panel/delete`.
+
+Me and Them stay separate labels when a Windows session is feeding the state: the microphone is Me, the speaker loopback is Them. That split is how turns get a speaker. It is an input, not the product. SAM 3.1 has one job here: when the line says "ito", "yung nasa taas", or "this", it masks that region and the crop sticks to the conflict card. If SAM is unavailable, the crop is the share area.
 
 ## Day-1 eval
 

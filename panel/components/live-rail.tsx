@@ -16,6 +16,7 @@ type CardItem = {
   prd_section: string | null;
   who: string | null;
   what: string | null;
+  when: string | null;
   trigger_text: string | null;
   created_at: string;
   latency_ms: number;
@@ -23,6 +24,18 @@ type CardItem = {
   source: string;
   deictic: string | null;
   segmenter: string | null;
+  proactive: boolean;
+};
+
+type OpenItem = { id: string; title: string; prd_section: string | null; status: string };
+type Commitment = { id: string; who: string | null; what: string | null; when: string };
+
+type Meeting = {
+  prd_sections: { anchor: string; heading: string; quote: string }[];
+  commitments: Commitment[];
+  open_items: OpenItem[];
+  latency: { count: number; p50_ms: number | null; p95_ms: number | null; target_ms: number; over_target: number };
+  retention: string;
 };
 
 type Utterance = {
@@ -45,6 +58,9 @@ type ListenerState = {
   skipped_frames: number;
   warnings: string[];
   latest_frame_url: string | null;
+  retention: string;
+  meeting: Meeting;
+  latency: Meeting["latency"];
 };
 
 const LABELS: Record<CardItem["type"], string> = {
@@ -88,6 +104,11 @@ export function LiveRail() {
     }
   }, []);
 
+  const wipe = useCallback(async () => {
+    await fetch("/listener/delete", { method: "POST" });
+    await pull();
+  }, [pull]);
+
   useEffect(() => {
     void pull();
     const id = setInterval(() => void pull(), 1000);
@@ -110,17 +131,50 @@ export function LiveRail() {
             </h1>
             <p className="mt-2 text-sm text-[#b7aa9b]">{data?.title || "Waiting for a call"}</p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => void pull()}>
-            Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => void pull()}>
+              Refresh
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void wipe()}>
+              Delete
+            </Button>
+          </div>
         </header>
 
         <div className="mb-4 flex flex-wrap gap-2">
           <Badge variant="secondary">{data?.mode || "offline"}</Badge>
+          {data?.latency && data.latency.count > 0 ? (
+            <Badge variant="outline">
+              p50 {data.latency.p50_ms} ms · p95 {data.latency.p95_ms} ms
+            </Badge>
+          ) : null}
           {data?.spark ? <Badge variant="outline">{data.spark}</Badge> : null}
-          {data?.transcriber ? <Badge variant="outline">{data.transcriber}</Badge> : null}
-          {data ? <Badge variant="outline">{data.skipped_frames} unchanged frames dropped</Badge> : null}
+          {data ? <Badge variant="outline">last frame only</Badge> : null}
         </div>
+
+        {data?.meeting?.open_items?.length ? (
+          <section className="mb-4 space-y-2">
+            <h2 className="text-[11px] font-semibold tracking-[0.18em] text-[#e36a57]">OPEN AGAINST THE PRD</h2>
+            {data.meeting.open_items.map((item) => (
+              <p key={item.id} className="text-sm text-[#f4efe6]">
+                {item.title}
+                {item.prd_section ? <span className="text-[#f0b429]"> · {item.prd_section}</span> : null}
+              </p>
+            ))}
+          </section>
+        ) : null}
+
+        {data?.meeting?.commitments?.length ? (
+          <section className="mb-4 space-y-2">
+            <h2 className="text-[11px] font-semibold tracking-[0.18em] text-[#3dbe8c]">PROMISES</h2>
+            {data.meeting.commitments.map((item) => (
+              <p key={item.id} className="text-sm text-[#f4efe6]">
+                {item.who} will {item.what}
+                <span className="text-[#b7aa9b]"> · {item.when}</span>
+              </p>
+            ))}
+          </section>
+        ) : null}
 
         {!loaded ? <Skeleton /> : null}
         {loaded && error && !data ? <ErrorState message={error} /> : null}
@@ -131,9 +185,12 @@ export function LiveRail() {
             <Card key={card.id} size="sm" className={`border-l-4 ${STRIPE[card.type]} bg-[#262019]`}>
               <CardHeader className="grid-cols-[1fr_auto] items-start">
                 <div className="space-y-1">
-                  <Badge variant={card.type === "PRD_CONFLICT" ? "destructive" : "secondary"}>
-                    {LABELS[card.type]}
-                  </Badge>
+                  <div className="flex flex-wrap gap-1">
+                    <Badge variant={card.type === "PRD_CONFLICT" ? "destructive" : "secondary"}>
+                      {LABELS[card.type]}
+                    </Badge>
+                    {card.proactive ? <Badge variant="outline">pushed live</Badge> : null}
+                  </div>
                   <CardTitle
                     className="text-base text-[#f4efe6]"
                     style={{ fontFamily: "var(--font-fraunces), serif" }}
@@ -160,6 +217,7 @@ export function LiveRail() {
                 {card.who && card.what ? (
                   <p className="text-xs text-[#b7aa9b]">
                     {card.who} · {card.what}
+                    {card.when ? ` · ${card.when}` : ""}
                   </p>
                 ) : null}
                 {card.trigger_text ? (
@@ -229,8 +287,8 @@ export function LiveRail() {
         ) : null}
 
         <p className="mt-auto pt-6 text-xs leading-relaxed text-[#b7aa9b]">
-          {data?.consent ||
-            "Staged mock. Synthesized voices, fictional BayaniPay, and no bot joins the Teams call."}
+          {data?.retention}
+          {data?.consent ? ` ${data.consent}` : " Staged mock. Fictional BayaniPay. Nothing is kept after you delete the meeting."}
         </p>
       </div>
     </main>
@@ -254,8 +312,8 @@ function EmptyState() {
       </CardHeader>
       <CardContent>
         <p className="text-sm text-[#b7aa9b]">
-          Cards show up when a line finishes. A conflict cites the PRD. A commitment names who promised what.
-          A reply is a Taglish line you can say.
+          A PRD conflict lands on its own while the line is still going. You do not have to ask.
+          A commitment names who, what, and when. A reply is a Taglish line you can say.
         </p>
       </CardContent>
     </Card>

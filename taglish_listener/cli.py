@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> None:
     live.add_argument("--host", default="127.0.0.1")
     live.add_argument("--port", type=int, default=8747)
 
+    sub.add_parser("delete")
+
     evaluate = sub.add_parser("eval")
     evaluate.add_argument("--audio", type=Path, default=None)
     evaluate.add_argument("--reference", type=Path, default=None)
@@ -47,9 +49,25 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.cmd == "eval":
         raise SystemExit(_eval(args))
+    if args.cmd == "delete":
+        _delete_disk()
+        return
     if args.cmd == "replay":
         snapshot = _prepare(args, paced=False)
-        json.dump({"cards": snapshot["cards"], "backends": _backends(snapshot)}, sys.stdout, indent=2)
+        json.dump(
+            {
+                "cards": snapshot["cards"],
+                "latency": snapshot["latency"],
+                "meeting": {
+                    "open_items": snapshot["meeting"]["open_items"],
+                    "commitments": snapshot["meeting"]["commitments"],
+                },
+                "backends": _backends(snapshot),
+                "retention": snapshot["retention"],
+            },
+            sys.stdout,
+            indent=2,
+        )
         sys.stdout.write("\n")
         return
     _serve(args)
@@ -76,6 +94,20 @@ def _prepare(args, *, paced: bool) -> dict:
     )
     pace = args.pace_ms if paced else 0
     return run_replay(pipeline, scenario, pace_ms=pace)
+
+
+def _delete_disk() -> None:
+    from taglish_listener.store import RETENTION_NOTE
+
+    media = repo_root() / "var" / "runtime"
+    removed = 0
+    if media.exists():
+        for path in media.iterdir():
+            if path.is_file():
+                path.unlink()
+                removed += 1
+    json.dump({"deleted_files": removed, "retention": RETENTION_NOTE}, sys.stdout, indent=2)
+    sys.stdout.write("\n")
 
 
 def _backends(snapshot: dict) -> dict:

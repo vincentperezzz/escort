@@ -25,6 +25,7 @@ class CardDraft:
     prd_section: str | None = None
     who: str | None = None
     what: str | None = None
+    when: str | None = None
 
 
 @dataclass
@@ -102,6 +103,8 @@ class CardRecord:
     source: str
     deictic: str | None
     segmenter: str | None
+    when: str | None = None
+    proactive: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

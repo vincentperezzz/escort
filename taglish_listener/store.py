@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,9 +8,45 @@ from typing import Any
 
 from taglish_listener.models import CARD_TYPES, CardRecord, FrameRecord, Utterance
 
+RETENTION_NOTE = (
+    "One meeting lives here: PRD sections, Me and Them turns, commitments, open items, and the last changed frame. "
+    "Raw audio is not kept. Older frames are dropped as soon as a new one arrives. "
+    "delete_meeting_state throws the whole meeting away when the call is over."
+)
+LATENCY_TARGET_MS = 5000
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def latency_summary(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {
+            "count": 0,
+            "p50_ms": None,
+            "p95_ms": None,
+            "target_ms": LATENCY_TARGET_MS,
+            "over_target": 0,
+        }
+    ordered = sorted(values)
+
+    def pick(fraction: float) -> float:
+        if len(ordered) == 1:
+            return round(ordered[0], 1)
+        rank = (len(ordered) - 1) * fraction
+        low = int(rank)
+        high = min(low + 1, len(ordered) - 1)
+        weight = rank - low
+        return round(ordered[low] * (1 - weight) + ordered[high] * weight, 1)
+
+    return {
+        "count": len(ordered),
+        "p50_ms": pick(0.50),
+        "p95_ms": pick(0.95),
+        "target_ms": LATENCY_TARGET_MS,
+        "over_target": sum(1 for value in ordered if value > LATENCY_TARGET_MS),
+    }
 
 
 def new_id(prefix: str) -> str:
@@ -36,6 +71,7 @@ class MeetingStore:
         self.spark = ""
         self.segmenter = ""
         self.prd_name = ""
+        self.prd_sections: list[dict[str, str]] = []
         self.started_at = utc_now()
         self._dedupe: set[tuple[Any, ...]] = set()
 
@@ -81,7 +117,10 @@ class MeetingStore:
             url=f"/panel/media/{name}",
         )
         with self.lock:
-            self.frames.append(record)
+            previous = self.frames[-1] if self.frames else None
+            self.frames = [record]
+        if previous and previous.path != record.path:
+            self._unlink(Path(previous.path))
         return record
 
     def note_skipped_frame(self) -> None:
@@ -117,6 +156,68 @@ class MeetingStore:
             self.cards.append(card)
         return card
 
+    def meeting(self) -> dict[str, Any]:
+        with self.lock:
+            commitments = []
+            open_items = []
+            for card in self.cards:
+                if card.type == "COMMITMENT":
+                    commitments.append(
+                        {
+                            "id": card.id,
+                            "who": card.who,
+                            "what": card.what,
+                            "when": card.when or "unspecified",
+                            "utterance_id": card.utterance_id,
+                        }
+                    )
+                if card.type == "PRD_CONFLICT":
+                    open_items.append(
+                        {
+                            "id": card.id,
+                            "title": card.title,
+                            "prd_section": card.prd_section,
+                            "status": "open",
+                        }
+                    )
+            last = self.frames[-1].to_dict() if self.frames else None
+            return {
+                "prd_sections": list(self.prd_sections),
+                "commitments": commitments,
+                "turns": [item.to_dict() for item in self.utterances],
+                "open_items": open_items,
+                "last_frame": last,
+                "latency": latency_summary([card.latency_ms for card in self.cards]),
+                "retention": RETENTION_NOTE,
+            }
+
+    def delete_meeting(self) -> dict[str, Any]:
+        with self.lock:
+            paths = [Path(frame.path) for frame in self.frames]
+            paths.extend(Path(card.crop_path) for card in self.cards if card.crop_path)
+            self.utterances.clear()
+            self.frames.clear()
+            self.cards.clear()
+            self.partials.clear()
+            self.warnings.clear()
+            self.skipped_frames = 0
+            self._dedupe.clear()
+            self.mode = "deleted"
+        for path in paths:
+            self._unlink(path)
+        if self.media_dir.exists():
+            for path in self.media_dir.glob("*"):
+                if path.is_file():
+                    self._unlink(path)
+        return {"deleted": True, "retention": RETENTION_NOTE}
+
+    def _unlink(self, path: Path) -> None:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+
     def save_png(self, image: Any, stem: str) -> Path:
         name = f"{stem}_{uuid.uuid4().hex[:8]}.png"
         path = self.media_dir / name
@@ -133,10 +234,12 @@ class MeetingStore:
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             latest = self.frames[-1].url if self.frames else None
+            meeting = self.meeting()
             return {
                 "title": self.title,
                 "mode": self.mode,
                 "consent": self.consent,
+                "retention": RETENTION_NOTE,
                 "transcriber": self.transcriber,
                 "spark": self.spark,
                 "segmenter": self.segmenter,
@@ -149,5 +252,7 @@ class MeetingStore:
                 "skipped_frames": self.skipped_frames,
                 "warnings": list(self.warnings),
                 "latest_frame_url": latest,
+                "meeting": meeting,
+                "latency": meeting["latency"],
                 "server_time": utc_now(),
             }

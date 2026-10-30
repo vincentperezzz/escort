@@ -114,7 +114,15 @@ def test_rule_spark_cites_the_prd_and_emits_each_card_type(tmp_path: Path):
     assert types == {"PRD_CONFLICT", "COMMITMENT", "SUGGESTED_REPLY"}
     conflict = next(card for card in snapshot["cards"] if "Phase 2" in (card["prd_section"] or ""))
     assert "2.2" in conflict["prd_section"]
-    assert conflict["latency_ms"] >= 0
+    assert conflict["crop_url"]
+    assert conflict["latency_ms"] <= 5000
+    assert snapshot["latency"]["p50_ms"] is not None
+    assert snapshot["latency"]["p95_ms"] is not None
+    assert snapshot["latency"]["over_target"] == 0
+    assert len(snapshot["frames"]) == 1
+    assert snapshot["meeting"]["open_items"]
+    assert snapshot["meeting"]["commitments"]
+    assert all(item["when"] for item in snapshot["meeting"]["commitments"])
     fee = next(card for card in snapshot["cards"] if card["prd_section"] and card["prd_section"].startswith("3."))
     assert "2.4" in fee["body"] or "finance" in fee["body"].lower()
     cropped = [card for card in snapshot["cards"] if card["deictic"] and "taas" in card["deictic"].lower()]
@@ -126,6 +134,42 @@ def test_rule_spark_cites_the_prd_and_emits_each_card_type(tmp_path: Path):
     before = len(snapshot["cards"])
     pipeline.review_if_stale()
     assert len(store.cards) == before
+
+
+def test_partial_pushes_a_conflict_before_the_turn_ends(tmp_path: Path):
+    scenario = load_scenario()
+    store = MeetingStore(tmp_path)
+    pipeline = build_pipeline(
+        store,
+        scenario,
+        settings(),
+        transcriber_mode="scripted",
+        spark_mode="rules",
+        segmenter_mode="fallback",
+    )
+    pipeline.ingest_image(Image.open(scenario.frames[0].path))
+    pipeline.note_partial(
+        "Them",
+        "Pwede ba nating i-pull yung payment integration into Phase 1?",
+    )
+    assert store.utterances == []
+    early = [card for card in store.cards if card.type == "PRD_CONFLICT"]
+    assert len(early) == 1
+    assert early[0].proactive is True
+    assert "2.2" in (early[0].prd_section or "")
+    assert early[0].crop_url
+    from taglish_listener.models import Turn
+
+    pipeline.finish_turn(
+        Turn(
+            speaker="Them",
+            text="Pwede ba nating i-pull yung payment integration into Phase 1? Kailangan namin yung card checkout.",
+        )
+    )
+    conflicts = [card for card in store.cards if card.type == "PRD_CONFLICT" and "2.2" in (card.prd_section or "")]
+    assert len(conflicts) == 1
+    assert conflicts[0].utterance_id
+    assert conflicts[0].latency_ms <= 5000
 
 
 def test_latency_covers_the_spark_call(tmp_path: Path):
@@ -363,6 +407,12 @@ def test_panel_route_and_mcp_tools(tmp_path: Path):
     context = json.loads(asyncio.run(server.call_tool("get_live_context", {"window": 8})).content[0].text)
     assert context["transcript"]
     assert context["screen_deltas"]
+    assert context["latency"]["p50_ms"] is not None
+    assert context["meeting"]["prd_sections"]
+    missed = json.loads(asyncio.run(server.call_tool("what_did_i_miss", {})).content[0].text)
+    assert missed["open_items"]
+    assert "summary" in missed
+    assert "type" not in missed
     image = asyncio.run(server.call_tool("get_latest_frame", {}))
     assert image.content[0].type == "image"
     pushed = json.loads(
@@ -389,3 +439,7 @@ def test_panel_route_and_mcp_tools(tmp_path: Path):
         assert image_response.status_code == 200
         assert image_response.headers["content-type"].startswith("image/")
         assert client.get("/panel/media/../scenario.json").status_code == 404
+        deleted = client.post("/panel/delete")
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] is True
+        assert client.get("/panel/state").json()["cards"] == []

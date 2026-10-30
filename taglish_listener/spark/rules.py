@@ -19,6 +19,17 @@ def _clean(text: str) -> str:
     return text.strip().rstrip(".").strip()
 
 
+def infer_when(text: str) -> str:
+    lowered = text.lower()
+    if "after this call" in lowered:
+        return "after this call"
+    if "bago" in lowered:
+        return "before committing"
+    if "muna" in lowered:
+        return "before agreeing"
+    return "unspecified"
+
+
 class RuleSpark:
     name = "rules-fallback"
 
@@ -102,11 +113,16 @@ def _commitment(trigger: Utterance) -> CardDraft | None:
     match = _CONFIRM.search(trigger.text) or _CHECK.search(trigger.text)
     if not match:
         return None
+    verb = "confirm" if match.re is _CONFIRM else "check"
     what = _clean(match.group("what"))
+    what = re.sub(r"^(muna|bago)\s+", "", what, flags=re.I)
+    what = re.sub(r"\s+bago ako mag-commit$", "", what, flags=re.I)
+    what = f"{verb} {what}".strip()
     return CardDraft(
         type="COMMITMENT",
         title="Promise on the call",
-        body=f"{trigger.speaker} said they would {what}.",
+        body=f"{trigger.speaker} will {what}.",
         who=trigger.speaker,
         what=what,
+        when=infer_when(trigger.text),
     )
