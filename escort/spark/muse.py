@@ -58,6 +58,13 @@ def spark_schema() -> dict[str, Any]:
     }
 
 
+def spark_model_name(model: str) -> str:
+    cleaned = (model or "muse-spark-1.3").strip()
+    if cleaned.endswith("-contributor"):
+        return "muse-spark-1.3"
+    return cleaned
+
+
 def build_spark_request(
     *,
     model: str,
@@ -85,9 +92,9 @@ def build_spark_request(
             }
         )
     return {
-        "model": model,
-        "reasoning_effort": "low",
-        "max_completion_tokens": 1200,
+        "model": spark_model_name(model),
+        "reasoning_effort": "minimal",
+        "max_completion_tokens": 1600,
         "response_format": spark_schema(),
         "messages": [
             {

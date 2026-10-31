@@ -27,11 +27,14 @@ def load_settings() -> Settings:
     if key is not None and not key.strip():
         key = None
     base = os.environ.get("META_API_BASE", "https://api.meta.ai/v1").rstrip("/")
+    spark = os.environ.get("META_SPARK_MODEL", "muse-spark-1.3")
+    if spark.endswith("-contributor"):
+        spark = "muse-spark-1.3"
     return Settings(
         api_key=key,
         base_url=base,
         asr_model=os.environ.get("META_ASR_MODEL", "muse-voice-transcribe-1.0"),
-        spark_model=os.environ.get("META_SPARK_MODEL", "muse-spark-1.3"),
+        spark_model=spark,
         sam_model=os.environ.get("META_SAM_MODEL", "sam-3.1"),
         language_bias=("Tagalog", "English"),
         spark_interval_s=float(os.environ.get("TAGLISH_SPARK_INTERVAL", "10")),

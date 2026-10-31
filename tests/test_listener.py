@@ -302,7 +302,8 @@ def test_muse_spark_request_shape(tmp_path: Path):
     )
     assert request["model"] == "muse-spark-1.3"
     assert request["response_format"]["type"] == "json_schema"
-    assert request["reasoning_effort"] == "low"
+    assert request["reasoning_effort"] == "minimal"
+    assert request["max_completion_tokens"] >= 1500
     parts = request["messages"][1]["content"]
     assert parts[1]["type"] == "image_url"
     assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")

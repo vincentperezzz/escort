@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
+from escort.asr_text import dedupe_adjacent
 from escort.models import Turn
 
 
@@ -15,20 +17,28 @@ class AsrReducer:
     open_turn: int | None = None
     partial: str = ""
     vendor_speaker: str | None = None
+    start_ms: int = 0
+    end_ms: int = 0
 
     def apply(self, event: dict) -> Turn | None:
         kind = event.get("type")
         if kind == "speechStart":
             self.open_turn = event.get("turnId")
+            self.start_ms = int(event.get("audioProcessedMs") or event.get("startMs") or 0)
+            self.end_ms = 0
             self.partial = ""
             return None
+        if kind == "speechEnd":
+            self.end_ms = int(event.get("audioProcessedMs") or event.get("endMs") or 0)
+            return None
         if kind == "transcript":
-            text = event.get("transcript") or ""
+            text = dedupe_adjacent(event.get("transcript") or "")
             if event.get("final"):
                 return Turn(
                     speaker=self.stream_speaker,
                     text=text,
-                    end_ms=int(event.get("audioProcessedMs") or 0),
+                    start_ms=self.start_ms,
+                    end_ms=self.end_ms or int(event.get("audioProcessedMs") or 0),
                     vendor_speaker=self.vendor_speaker,
                 )
             self.partial = text
@@ -37,17 +47,20 @@ class AsrReducer:
             self.vendor_speaker = event.get("label")
             return None
         if kind == "speechComplete":
-            text = event.get("transcript") or self.partial
+            text = dedupe_adjacent(event.get("transcript") or self.partial)
             turn = Turn(
                 speaker=self.stream_speaker,
                 text=text,
-                end_ms=int(event.get("audioProcessedMs") or 0),
+                start_ms=self.start_ms,
+                end_ms=self.end_ms or int(event.get("audioProcessedMs") or 0),
                 turn_id=event.get("turnId"),
                 vendor_speaker=self.vendor_speaker,
             )
             self.partial = ""
             self.open_turn = None
             self.vendor_speaker = None
+            self.start_ms = 0
+            self.end_ms = 0
             return turn
         if kind == "error":
             raise AsrError(event.get("message") or "asr error")
@@ -90,11 +103,31 @@ def file_request(
     }
 
 
+def end_stream_message() -> dict:
+    return {"type": "endStream"}
+
+
+def turns_from_sse(body: str, speaker: str) -> list[Turn]:
+    reducer = AsrReducer(speaker)
+    turns: list[Turn] = []
+    for line in body.splitlines():
+        if not line.startswith("data:"):
+            continue
+        raw = line[5:].strip()
+        if not raw or raw == "[DONE]":
+            continue
+        event = json.loads(raw)
+        turn = reducer.apply(event)
+        if turn and turn.text.strip():
+            turns.append(turn)
+    return turns
+
+
 def turns_from_file_payload(payload: dict, speaker: str) -> list[Turn]:
     raw_turns = payload.get("turns") or []
     turns: list[Turn] = []
     for item in raw_turns:
-        text = (item.get("transcript") or "").strip()
+        text = dedupe_adjacent((item.get("transcript") or "").strip())
         if not text:
             continue
         turns.append(
@@ -109,7 +142,7 @@ def turns_from_file_payload(payload: dict, speaker: str) -> list[Turn]:
         )
     if turns:
         return turns
-    text = (payload.get("transcript") or "").strip()
+    text = dedupe_adjacent((payload.get("transcript") or "").strip())
     if not text:
         return []
     return [

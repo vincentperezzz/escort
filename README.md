@@ -151,6 +151,14 @@ Word error rate is an edit distance over lowercase tokens. Latency is the time t
 ```bash
 python -m escort.eval_day1 --hypothesis fixtures/eval/reference.txt
 python -m escort eval --backend muse
+python -m escort record
+python scripts/record_eval.py
+```
+
+`record` reads three Taglish BayaniPay lines into the Windows mic and writes 24 kHz mono WAVs plus the reference text under `fixtures/eval/real/`. Then:
+
+```bash
+python -m escort eval --backend muse --audio fixtures/eval/real/01.wav --reference fixtures/eval/real/01.txt
 ```
 
 `auto` calls Muse Voice Transcribe when `MODEL_API_KEY` is set, otherwise faster-whisper if it is installed. With neither, the script exits 2 and does not report the scripted fixture as a recognition score. `--backend scripted` is labeled `measures_recognition: false`.
@@ -179,11 +187,11 @@ Verified from the docs, and encoded in the adapters:
 | --- | --- |
 | Base URL | `https://api.meta.ai/v1` |
 | Auth | `Authorization: Bearer $MODEL_API_KEY` on HTTP. The realtime socket ignores that header and wants `authorization.accessToken` in the first JSON frame. |
-| Muse Voice Transcribe | Model `muse-voice-transcribe-1.0`. File: `POST /v1/asr/transcribe` multipart `request` JSON plus `audio` WAV. Live: `wss://api.meta.ai/v1/asr/realtime`. |
+| Muse Voice Transcribe | Model `muse-voice-transcribe-1.0`. Live and file playback prefer `wss://api.meta.ai/v1/asr/realtime` (`ENDPOINTING`, PCM at real-time pace, then `{"type":"endStream"}`). If the socket fails, the batch fallback is `POST /v1/asr/transcribe`. |
 | Audio | WAV or PCM, mono, 16-bit, 16 kHz or 24 kHz. `PCM_24KHZ` on the socket. `audioEncoding: "WAV"` on the file call. |
 | Language | `languageBias: ["Tagalog", "English"]`. Tagalog is one of the 25 listed languages. The hint does not force a language. `keywords` biases names. |
 | Turns | `ENDPOINTING` emits `speechStart`, partial `transcript`, `speechEnd`, `speechComplete`. The stream label Me or Them wins over a diarization letter. |
-| Muse Spark | `POST /v1/chat/completions`, model `muse-spark-1.3`. Images go in an `image_url` part as a data URL. Structured output uses `response_format.type = json_schema`. `reasoning_effort: "none"` is rejected, so the loop sends `"low"`. Temperature is left at the default. |
+| Muse Spark | `POST /v1/chat/completions`, model `muse-spark-1.3` only. The `-contributor` id is rewritten to `muse-spark-1.3`. `reasoning_effort` is `minimal` (`none` is rejected). `max_completion_tokens` is 1600 so the reply is not an empty reasoning cap. |
 | SAM 3.1 | `POST /v1/responses`, model `sam-3.1`. User message with `input_text` (a short noun phrase) and `input_image` whose `image_url` is a string, including a data URL. Boxes come back as `<\|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..|>`. Docs say spatial phrases are unreliable, so the noun is plain ("percentage") and this repo picks the box that sits in the deictic region. |
 
 Assumed, because it was not executed against the API:

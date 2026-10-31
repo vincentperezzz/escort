@@ -43,6 +43,9 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("delete")
 
+    record = sub.add_parser("record")
+    record.add_argument("--out", type=Path, default=None)
+
     evaluate = sub.add_parser("eval")
     evaluate.add_argument("--audio", type=Path, default=None)
     evaluate.add_argument("--reference", type=Path, default=None)
@@ -54,6 +57,11 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(_eval(args))
     if args.cmd == "delete":
         _delete_disk()
+        return
+    if args.cmd == "record":
+        from escort.record_eval import record_scripts
+
+        record_scripts(args.out)
         return
     if args.cmd == "replay":
         snapshot = _prepare(args, paced=False)

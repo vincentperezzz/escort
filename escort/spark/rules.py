@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import re
 
+from escort.asr_text import normalize_asr
 from escort.models import CardDraft, FrameRecord, Utterance
 from escort.prd import Section, parse_sections, section_by_anchor
 
 
 _PHASE = re.compile(r"phase\s*1", re.I)
-_PAYMENT = re.compile(r"payment integration|card checkout|instapay", re.I)
+_PAYMENT = re.compile(r"payment integration|card checkout|instapay|gcash", re.I)
 _PULL = re.compile(r"i-pull|pull|into phase|move", re.I)
 _FEE = re.compile(r"i-adjust|adjust|2\.9", re.I)
 _MONEY = re.compile(r"percent|fee|number|processing", re.I)
@@ -43,7 +44,7 @@ class RuleSpark:
     ) -> list[CardDraft]:
         del utterances, frame
         sections = parse_sections(prd_text)
-        text = trigger.text
+        text = normalize_asr(trigger.text)
         cards: list[CardDraft] = []
         phase = section_by_anchor(sections, "2.2")
         pricing = section_by_anchor(sections, "3")

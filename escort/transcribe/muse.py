@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import uuid
+import wave
 from pathlib import Path
 
 import httpx
@@ -11,13 +12,17 @@ import httpx
 from escort.models import Turn
 from escort.settings import Settings
 from escort.transcribe.base import TranscriberUnavailable
+from escort.audio_util import pcm_to_mono_24k
 from escort.transcribe.events import (
     AsrReducer,
     asr_urls,
+    end_stream_message,
     file_request,
     handshake_frame,
     turns_from_file_payload,
+    turns_from_sse,
 )
+from escort.transcribe.pace import iter_pcm_chunks, pcm_realtime_seconds
 
 
 class MuseFileTranscriber:
@@ -33,6 +38,16 @@ class MuseFileTranscriber:
         self._owns_client = client is None
 
     def transcribe_file(self, path: Path, *, speaker: str) -> list[Turn]:
+        if self._client is None:
+            try:
+                streamed = asyncio.run(self._stream_file(path, speaker))
+                if streamed:
+                    return streamed
+            except Exception:
+                pass
+        return self._post_file(path, speaker)
+
+    def _post_file(self, path: Path, speaker: str) -> list[Turn]:
         http_url, _ = asr_urls(self.settings.base_url)
         request = file_request(
             model=self.settings.asr_model,
@@ -49,7 +64,7 @@ class MuseFileTranscriber:
                 params={"sessionId": session_id},
                 headers={
                     "Authorization": f"Bearer {self.settings.api_key}",
-                    "Accept": "application/json",
+                    "Accept": "application/json, text/event-stream",
                 },
                 files={
                     "request": (None, json.dumps(request), "application/json"),
@@ -57,10 +72,47 @@ class MuseFileTranscriber:
                 },
             )
             response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                return turns_from_sse(response.text, speaker)
             return turns_from_file_payload(response.json(), speaker)
         finally:
             if self._owns_client and self._client is None:
                 client.close()
+
+    async def _stream_file(self, path: Path, speaker: str) -> list[Turn]:
+        import websockets
+
+        _, ws_base = asr_urls(self.settings.base_url)
+        session_id = f"file-{speaker.lower()}-{uuid.uuid4().hex[:12]}"
+        uri = f"{ws_base}?sessionId={session_id}"
+        frame = handshake_frame(
+            self.settings.api_key or "",
+            model=self.settings.asr_model,
+            mode="ENDPOINTING",
+            language_bias=list(self.settings.language_bias),
+            keywords=self.keywords,
+        )
+        pcm = wav_pcm_24k(path)
+        turns: list[Turn] = []
+        reducer = AsrReducer(speaker)
+        async with websockets.connect(uri, open_timeout=8, max_size=8_000_000) as ws:
+            await ws.send(json.dumps(frame))
+            ack = json.loads(await ws.recv())
+            if "sessionId" not in ack:
+                raise RuntimeError(f"handshake failed: {ack}")
+            for piece in iter_pcm_chunks(pcm):
+                await ws.send(piece)
+                await asyncio.sleep(pcm_realtime_seconds(len(piece)))
+            await ws.send(json.dumps(end_stream_message()))
+            async for message in ws:
+                if isinstance(message, bytes):
+                    continue
+                event = json.loads(message)
+                turn = reducer.apply(event)
+                if turn and turn.text.strip():
+                    turns.append(turn)
+        return turns
 
 
 class MuseRealtimeSession:
@@ -138,7 +190,7 @@ class MuseRealtimeSession:
                 while True:
                     item = await self._queue.get()
                     if item is None:
-                        await ws.send(json.dumps({"type": "endStream"}))
+                        await ws.send(json.dumps(end_stream_message()))
                         break
                     await ws.send(item)
                 await receiver
@@ -156,3 +208,16 @@ class MuseRealtimeSession:
             turn = reducer.apply(event)
             if turn and turn.text.strip():
                 self.on_final(turn)
+
+
+def wav_pcm_24k(path: Path) -> bytes:
+    with wave.open(str(path), "rb") as handle:
+        pcm = handle.readframes(handle.getnframes())
+        converted, _state = pcm_to_mono_24k(
+            pcm,
+            handle.getsampwidth(),
+            handle.getnchannels(),
+            handle.getframerate(),
+            None,
+        )
+    return converted

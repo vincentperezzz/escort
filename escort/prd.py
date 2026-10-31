@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from escort.asr_text import ASR_KEYWORDS
+
 
 @dataclass
 class Section:
@@ -56,5 +58,8 @@ def keywords_from_prd(markdown: str, limit: int = 24) -> list[str]:
         "processing fee",
         "card checkout",
     ]
-    found = [seed for seed in seeds if seed.lower() in markdown.lower()]
+    found = list(ASR_KEYWORDS)
+    for seed in seeds:
+        if seed.lower() in markdown.lower() and seed not in found:
+            found.append(seed)
     return found[:limit]
