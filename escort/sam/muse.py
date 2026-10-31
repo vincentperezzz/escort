@@ -8,10 +8,10 @@ from dataclasses import dataclass
 import httpx
 from PIL import Image
 
-from taglish_listener.models import Box, DeicticHint
-from taglish_listener.sam.fallback import crop_share
-from taglish_listener.sam.parse import crop_box, extract_text, parse_boxes, pick_box
-from taglish_listener.settings import Settings
+from escort.models import Box, DeicticHint
+from escort.sam.fallback import crop_share
+from escort.sam.parse import crop_box, extract_text, parse_boxes, pick_box
+from escort.settings import Settings
 
 
 class SamError(RuntimeError):

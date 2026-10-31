@@ -13,8 +13,8 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Taglish scope guard",
-  description: "Live PRD conflicts, commitments, and Taglish replies from a client call.",
+  title: "Escort",
+  description: "Live scope-creep guard for Taglish client calls. Not a recorder.",
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 import sys
 
-from taglish_listener.cli import main
+from escort.cli import main
 
 if __name__ == "__main__":
     argv = sys.argv[1:]

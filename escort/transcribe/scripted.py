@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from taglish_listener.audio_util import wav_duration_ms
-from taglish_listener.models import Turn
+from escort.audio_util import wav_duration_ms
+from escort.models import Turn
 
 
 class ScriptedTranscriber:

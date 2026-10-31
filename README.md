@@ -1,6 +1,6 @@
-# Taglish scope guard
+# Escort
 
-**Pitch:** This is not a recorder. It holds one meeting's live state, flags the moment you are about to agree to something the PRD forbids, and deletes that state when the call is over.
+**Pitch:** Escort is a live scope-creep guard for Taglish client calls. It escorts Muse through the meeting. This is not a recorder. It holds one meeting's live state, flags the moment you are about to agree to something the PRD forbids, and deletes that state when the call is over.
 
 The state is the product: PRD sections, Me and Them turns, commitments (who, what, when), open items, and the last frame that actually changed. A conflict card is pushed onto the panel on its own, while the line is still going or in the instant after it ends. It cites the PRD section and carries a crop of the screen region as evidence. You do not query for it.
 
@@ -10,7 +10,7 @@ For the hackathon the brain that writes the cards is Muse Spark. Any other MCP c
 
 The bundled demo is a staged mock meeting. BayaniPay is fictional. The voices are synthesized. Nothing joins a Teams call, and no real client was recorded.
 
-Live use still needs the people on the call to know a transcript is being made. Raw audio is not stored. Older frames are dropped. `delete_meeting_state` (or the Delete button, or `python -m taglish_listener delete`) wipes turns, cards, commitments, open items, and the last frame.
+Live use still needs the people on the call to know a transcript is being made. Raw audio is not stored. Older frames are dropped. `delete_meeting_state` (or the Delete button, or `python -m escort delete`) wipes turns, cards, commitments, open items, and the last frame.
 
 Another tool that already watches a screen, such as Screenpipe, can feed this same state. This layer is the guard, not the tape.
 
@@ -47,7 +47,7 @@ Card types, and only these three:
 python -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
-python -m taglish_listener replay
+python -m escort replay
 ```
 
 That prints the cards. The default transcriber is the scripted fixture, so the demo does not need a key. The WAV files are still read and timed.
@@ -55,7 +55,7 @@ That prints the cards. The default transcriber is the scripted fixture, so the d
 Two processes for the side panel:
 
 ```bash
-python -m taglish_listener serve --replay --pace-ms 900 --port 8747
+python -m escort serve --replay --pace-ms 900 --port 8747
 ```
 
 ```bash
@@ -72,7 +72,7 @@ Swap in real models when you have a key:
 
 ```bash
 export MODEL_API_KEY="LLM_..."
-python -m taglish_listener serve --replay --transcriber muse --spark muse --segmenter sam --port 8747
+python -m escort serve --replay --transcriber muse --spark muse --segmenter sam --port 8747
 ```
 
 `META_API_KEY` is accepted as an alias. The official name in Meta's docs is `MODEL_API_KEY`.
@@ -86,7 +86,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[windows,whisper]"
 $env:MODEL_API_KEY = "LLM_..."
-python -m taglish_listener live --transcriber muse --spark auto --segmenter auto --port 8747
+python -m escort live --transcriber muse --spark auto --segmenter auto --port 8747
 ```
 
 - Me is the default WASAPI microphone, via PyAudioWPatch.
@@ -116,9 +116,9 @@ Stdio, for any local MCP client. Set the working directory to this repo. See `ex
 ```json
 {
   "mcpServers": {
-    "taglish-listener": {
+    "escort": {
       "command": "python",
-      "args": ["-m", "taglish_listener", "serve", "--transport", "stdio", "--replay"]
+      "args": ["-m", "escort", "serve", "--transport", "stdio", "--replay"]
     }
   }
 }
@@ -127,13 +127,13 @@ Stdio, for any local MCP client. Set the working directory to this repo. See `ex
 Streamable HTTP, for a remote or plugin-style client:
 
 ```bash
-python -m taglish_listener serve --replay --port 8747
+python -m escort serve --replay --port 8747
 ```
 
 ```json
 {
   "mcpServers": {
-    "taglish-listener": {
+    "escort": {
       "url": "http://127.0.0.1:8747/mcp"
     }
   }
@@ -149,8 +149,8 @@ Me and Them stay separate labels when a Windows session is feeding the state: th
 Word error rate is an edit distance over lowercase tokens. Latency is the time the transcriber takes to return.
 
 ```bash
-python -m taglish_listener.eval_day1 --hypothesis fixtures/eval/reference.txt
-python -m taglish_listener eval --backend muse
+python -m escort.eval_day1 --hypothesis fixtures/eval/reference.txt
+python -m escort eval --backend muse
 ```
 
 `auto` calls Muse Voice Transcribe when `MODEL_API_KEY` is set, otherwise faster-whisper if it is installed. With neither, the script exits 2 and does not report the scripted fixture as a recognition score. `--backend scripted` is labeled `measures_recognition: false`.

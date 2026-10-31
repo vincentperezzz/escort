@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PIL import Image
 
-from taglish_listener.capture.windows_audio import CaptureUnavailable
+from escort.capture.windows_audio import CaptureUnavailable
 
 
 class ScreenGrabber:

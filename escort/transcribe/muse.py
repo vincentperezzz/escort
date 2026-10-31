@@ -8,10 +8,10 @@ from pathlib import Path
 
 import httpx
 
-from taglish_listener.models import Turn
-from taglish_listener.settings import Settings
-from taglish_listener.transcribe.base import TranscriberUnavailable
-from taglish_listener.transcribe.events import (
+from escort.models import Turn
+from escort.settings import Settings
+from escort.transcribe.base import TranscriberUnavailable
+from escort.transcribe.events import (
     AsrReducer,
     asr_urls,
     file_request,

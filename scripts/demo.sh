@@ -6,7 +6,7 @@ if [ -x .venv/bin/python ]; then
 else
   PY=python
 fi
-"$PY" -m taglish_listener serve --replay --pace-ms 900 --host 127.0.0.1 --port 8747 &
+"$PY" -m escort serve --replay --pace-ms 900 --host 127.0.0.1 --port 8747 &
 LISTENER=$!
 trap 'kill "$LISTENER"' EXIT
 cd panel

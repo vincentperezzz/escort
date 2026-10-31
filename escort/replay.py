@@ -7,17 +7,17 @@ from pathlib import Path
 
 from PIL import Image
 
-from taglish_listener.paths import repo_root
-from taglish_listener.pipeline import Pipeline
-from taglish_listener.prd import keywords_from_prd
-from taglish_listener.sam.muse import DeicticSegmenter, MuseSam
-from taglish_listener.settings import Settings
-from taglish_listener.spark.muse import FallbackSpark, MuseSpark
-from taglish_listener.spark.rules import RuleSpark
-from taglish_listener.store import MeetingStore
-from taglish_listener.transcribe.muse import MuseFileTranscriber
-from taglish_listener.transcribe.scripted import ScriptedTranscriber
-from taglish_listener.transcribe.whisper_fallback import WhisperTranscriber
+from escort.paths import repo_root
+from escort.pipeline import Pipeline
+from escort.prd import keywords_from_prd
+from escort.sam.muse import DeicticSegmenter, MuseSam
+from escort.settings import Settings
+from escort.spark.muse import FallbackSpark, MuseSpark
+from escort.spark.rules import RuleSpark
+from escort.store import MeetingStore
+from escort.transcribe.muse import MuseFileTranscriber
+from escort.transcribe.scripted import ScriptedTranscriber
+from escort.transcribe.whisper_fallback import WhisperTranscriber
 
 
 @dataclass

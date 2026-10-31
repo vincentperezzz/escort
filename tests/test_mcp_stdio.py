@@ -2,7 +2,7 @@ import asyncio
 import json
 import sys
 
-from taglish_listener.paths import repo_root
+from escort.paths import repo_root
 
 
 def test_stdio_mcp_client_reads_cards():
@@ -13,7 +13,7 @@ def test_stdio_mcp_client_reads_cards():
         command=sys.executable,
         args=[
             "-m",
-            "taglish_listener",
+            "escort",
             "serve",
             "--transport",
             "stdio",

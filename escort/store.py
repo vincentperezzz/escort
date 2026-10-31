@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from taglish_listener.models import CARD_TYPES, CardRecord, FrameRecord, Utterance
+from escort.models import CARD_TYPES, CardRecord, FrameRecord, Utterance
 
 RETENTION_NOTE = (
     "One meeting lives here: PRD sections, Me and Them turns, commitments, open items, and the last changed frame. "

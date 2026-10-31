@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from taglish_listener.models import Turn
-from taglish_listener.transcribe.base import TranscriberUnavailable
+from escort.models import Turn
+from escort.transcribe.base import TranscriberUnavailable
 
 
 class WhisperTranscriber:
@@ -14,7 +14,7 @@ class WhisperTranscriber:
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise TranscriberUnavailable(
-                "faster-whisper is not installed. pip install 'taglish-listener[whisper]'"
+                "faster-whisper is not installed. pip install 'escort[whisper]'"
             ) from exc
         self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
         self.name = f"faster-whisper-{model_size}"

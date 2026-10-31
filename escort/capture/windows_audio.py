@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from taglish_listener.audio_util import pcm_to_mono_24k
+from escort.audio_util import pcm_to_mono_24k
 
 
 class CaptureUnavailable(RuntimeError):
@@ -32,7 +32,7 @@ class WindowsAudioCapture:
         except ImportError as exc:
             raise CaptureUnavailable(
                 "PyAudioWPatch is required on Windows for separate Me (mic) and Them (WASAPI loopback) streams. "
-                "pip install 'taglish-listener[windows]'"
+                "pip install 'escort[windows]'"
             ) from exc
         self._pyaudio = pyaudio
         self._pa = pyaudio.PyAudio()

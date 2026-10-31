@@ -7,8 +7,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
-from taglish_listener.pipeline import Pipeline
-from taglish_listener.store import MeetingStore
+from escort.pipeline import Pipeline
+from escort.store import MeetingStore
 
 
 class AppState:
@@ -19,9 +19,9 @@ class AppState:
 
 def create_server(state: AppState) -> MCPServer:
     mcp = MCPServer(
-        "taglish-listener",
+        "escort",
         instructions=(
-            "Taglish scope guard. The product is one meeting's live state, not a recording. "
+            "Escort is a live scope-creep guard for Taglish client calls. It escorts Muse through the meeting. This is not a recorder. "
             "PRD conflicts are pushed onto the panel without a query, with the PRD section and a screen crop. "
             "get_live_context returns that state plus latency p50 and p95. "
             "get_cards returns only PRD_CONFLICT, COMMITMENT, and SUGGESTED_REPLY. "

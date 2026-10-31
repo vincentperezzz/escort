@@ -98,7 +98,7 @@ export function LiveRail() {
       setData((await response.json()) as ListenerState);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Listener is quiet");
+      setError(err instanceof Error ? err.message : "Escort is quiet");
     } finally {
       setLoaded(true);
     }
@@ -122,13 +122,14 @@ export function LiveRail() {
       <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-4 py-5 sm:px-5">
         <header className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] font-semibold tracking-[0.22em] text-[#f0b429]">TAGLISH</p>
+            <p className="text-[11px] font-semibold tracking-[0.22em] text-[#f0b429]">ESCORT</p>
             <h1
               className="text-3xl leading-none text-[#f4efe6]"
               style={{ fontFamily: "var(--font-fraunces), serif" }}
             >
-              Scope guard
+              Escort
             </h1>
+            <p className="mt-1 text-xs text-[#b7aa9b]">Live scope-creep guard for Taglish client calls</p>
             <p className="mt-2 text-sm text-[#b7aa9b]">{data?.title || "Waiting for a call"}</p>
           </div>
           <div className="flex gap-2">
@@ -324,12 +325,12 @@ function ErrorState({ message }: { message: string }) {
   return (
     <Card size="sm" className="mb-3 border-l-4 border-l-[#e36a57] bg-[#262019]">
       <CardHeader>
-        <CardTitle style={{ fontFamily: "var(--font-fraunces), serif" }}>Listener is quiet</CardTitle>
+        <CardTitle style={{ fontFamily: "var(--font-fraunces), serif" }}>Escort is quiet</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         <p className="text-sm text-[#e36a57]">{message}</p>
         <p className="font-mono text-xs text-[#b7aa9b]">
-          python -m taglish_listener serve --replay --port 8747
+          python -m escort serve --replay --port 8747
         </p>
       </CardContent>
     </Card>

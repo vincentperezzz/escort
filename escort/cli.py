@@ -7,16 +7,19 @@ import threading
 import time
 from pathlib import Path
 
-from taglish_listener.paths import repo_root
-from taglish_listener.replay import build_pipeline, load_scenario, run_replay
-from taglish_listener.server import AppState, create_server
-from taglish_listener.settings import load_settings
-from taglish_listener.store import MeetingStore
-from taglish_listener.wer import wer
+from escort.paths import repo_root
+from escort.replay import build_pipeline, load_scenario, run_replay
+from escort.server import AppState, create_server
+from escort.settings import load_settings
+from escort.store import MeetingStore
+from escort.wer import wer
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="taglish-listener")
+    parser = argparse.ArgumentParser(
+        prog="escort",
+        description="Escort: a live scope-creep guard for Taglish client calls. Not a recorder.",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     serve = sub.add_parser("serve")
@@ -97,7 +100,7 @@ def _prepare(args, *, paced: bool) -> dict:
 
 
 def _delete_disk() -> None:
-    from taglish_listener.store import RETENTION_NOTE
+    from escort.store import RETENTION_NOTE
 
     media = repo_root() / "var" / "runtime"
     removed = 0
@@ -136,7 +139,7 @@ def _serve(args) -> None:
     live = args.cmd == "live" or getattr(args, "live", False)
     replay = getattr(args, "replay", False)
     if live:
-        from taglish_listener.live import start_live
+        from escort.live import start_live
 
         start_live(state.pipeline, settings, stop)
     elif replay:
@@ -189,7 +192,7 @@ def _eval(args) -> int:
                     "measures_recognition": False,
                     "wer": None,
                     "latency_ms": None,
-                    "error": "Set MODEL_API_KEY for Muse Voice Transcribe or pip install 'taglish-listener[whisper]'. "
+                    "error": "Set MODEL_API_KEY for Muse Voice Transcribe or pip install 'escort[whisper]'. "
                     "Pass --hypothesis to score a transcript you already have. "
                     "The scripted fixture is not a recognition score.",
                 }
@@ -209,13 +212,13 @@ def _eval(args) -> int:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
-    from taglish_listener.replay import load_scenario
-    from taglish_listener.transcribe.muse import MuseFileTranscriber
-    from taglish_listener.transcribe.whisper_fallback import WhisperTranscriber
+    from escort.replay import load_scenario
+    from escort.transcribe.muse import MuseFileTranscriber
+    from escort.transcribe.whisper_fallback import WhisperTranscriber
 
     scenario = load_scenario()
     if backend == "muse":
-        from taglish_listener.prd import keywords_from_prd
+        from escort.prd import keywords_from_prd
 
         transcriber = MuseFileTranscriber(settings, keywords=keywords_from_prd(scenario.prd_text))
     else:

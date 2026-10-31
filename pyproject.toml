@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "taglish-listener"
+name = "escort"
 version = "0.1.0"
-description = "Headless Taglish meeting listener. Scope-creep cards over MCP, with a side panel."
+description = "Escort: a live scope-creep guard for Taglish client calls. Not a recorder."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -22,10 +22,10 @@ whisper = ["faster-whisper"]
 dev = ["pytest>=8"]
 
 [project.scripts]
-taglish-listener = "taglish_listener.cli:main"
+escort = "escort.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["taglish_listener*"]
+include = ["escort*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

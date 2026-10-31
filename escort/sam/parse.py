@@ -4,7 +4,7 @@ import re
 
 from PIL import Image
 
-from taglish_listener.models import Box
+from escort.models import Box
 
 
 _BOX = re.compile(

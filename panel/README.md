@@ -1,6 +1,6 @@
-# Side panel
+# Escort side panel
 
-Next.js rail for the listener. From the repo root, start the listener, then:
+Next.js rail for Escort. From the repo root, start Escort, then:
 
 ```bash
 npm install

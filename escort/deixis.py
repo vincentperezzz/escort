@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from taglish_listener.models import DeicticHint
+from escort.models import DeicticHint
 
 
 _REGIONS: tuple[tuple[str, re.Pattern[str]], ...] = (

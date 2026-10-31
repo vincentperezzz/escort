@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "taglish-listener": {
+    "escort": {
       "command": "python",
       "args": [
         "-m",
-        "taglish_listener",
+        "escort",
         "serve",
         "--transport",
         "stdio",

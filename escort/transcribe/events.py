@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from taglish_listener.models import Turn
+from escort.models import Turn
 
 
 class AsrError(RuntimeError):

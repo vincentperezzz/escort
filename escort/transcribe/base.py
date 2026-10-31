@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from taglish_listener.models import Turn
+from escort.models import Turn
 
 
 class Transcriber(Protocol):

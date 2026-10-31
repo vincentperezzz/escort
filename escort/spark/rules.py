@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 
-from taglish_listener.models import CardDraft, FrameRecord, Utterance
-from taglish_listener.prd import Section, parse_sections, section_by_anchor
+from escort.models import CardDraft, FrameRecord, Utterance
+from escort.prd import Section, parse_sections, section_by_anchor
 
 
 _PHASE = re.compile(r"phase\s*1", re.I)

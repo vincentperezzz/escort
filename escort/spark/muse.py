@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 from PIL import Image
 
-from taglish_listener.models import CARD_TYPES, CardDraft, FrameRecord, Utterance
-from taglish_listener.settings import Settings
+from escort.models import CARD_TYPES, CardDraft, FrameRecord, Utterance
+from escort.settings import Settings
 
 
 class SparkError(RuntimeError):

@@ -7,24 +7,24 @@ import pytest
 from PIL import Image
 from starlette.testclient import TestClient
 
-from taglish_listener.audio_util import pcm_to_mono_24k
-from taglish_listener.capture.windows_audio import choose_loopback_device, choose_mic_device
-from taglish_listener.deixis import detect_deixis
-from taglish_listener.diff import FrameGate, dhash, hamming
-from taglish_listener.paths import repo_root
-from taglish_listener.pipeline import Pipeline
-from taglish_listener.replay import build_pipeline, load_scenario, run_replay
-from taglish_listener.sam.fallback import crop_share, share_rect
-from taglish_listener.sam.muse import DeicticSegmenter, MuseSam
-from taglish_listener.sam.parse import parse_boxes, pick_box
-from taglish_listener.server import AppState, create_server
-from taglish_listener.settings import Settings
-from taglish_listener.spark.muse import MuseSpark, build_spark_request, parse_spark_response
-from taglish_listener.spark.rules import RuleSpark
-from taglish_listener.store import MeetingStore
-from taglish_listener.transcribe.events import AsrReducer, file_request, handshake_frame, turns_from_file_payload
-from taglish_listener.transcribe.muse import MuseFileTranscriber
-from taglish_listener.wer import wer
+from escort.audio_util import pcm_to_mono_24k
+from escort.capture.windows_audio import choose_loopback_device, choose_mic_device
+from escort.deixis import detect_deixis
+from escort.diff import FrameGate, dhash, hamming
+from escort.paths import repo_root
+from escort.pipeline import Pipeline
+from escort.replay import build_pipeline, load_scenario, run_replay
+from escort.sam.fallback import crop_share, share_rect
+from escort.sam.muse import DeicticSegmenter, MuseSam
+from escort.sam.parse import parse_boxes, pick_box
+from escort.server import AppState, create_server
+from escort.settings import Settings
+from escort.spark.muse import MuseSpark, build_spark_request, parse_spark_response
+from escort.spark.rules import RuleSpark
+from escort.store import MeetingStore
+from escort.transcribe.events import AsrReducer, file_request, handshake_frame, turns_from_file_payload
+from escort.transcribe.muse import MuseFileTranscriber
+from escort.wer import wer
 
 
 ROOT = repo_root()
@@ -158,7 +158,7 @@ def test_partial_pushes_a_conflict_before_the_turn_ends(tmp_path: Path):
     assert early[0].proactive is True
     assert "2.2" in (early[0].prd_section or "")
     assert early[0].crop_url
-    from taglish_listener.models import Turn
+    from escort.models import Turn
 
     pipeline.finish_turn(
         Turn(

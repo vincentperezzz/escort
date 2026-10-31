@@ -5,13 +5,13 @@ import threading
 import time
 from pathlib import Path
 
-from taglish_listener.audio_util import rms_s16, write_wav
-from taglish_listener.capture.screen import ScreenGrabber
-from taglish_listener.capture.windows_audio import WindowsAudioCapture
-from taglish_listener.pipeline import Pipeline
-from taglish_listener.prd import keywords_from_prd
-from taglish_listener.settings import Settings
-from taglish_listener.transcribe.muse import MuseRealtimeSession
+from escort.audio_util import rms_s16, write_wav
+from escort.capture.screen import ScreenGrabber
+from escort.capture.windows_audio import WindowsAudioCapture
+from escort.pipeline import Pipeline
+from escort.prd import keywords_from_prd
+from escort.settings import Settings
+from escort.transcribe.muse import MuseRealtimeSession
 
 
 def start_live(pipeline: Pipeline, settings: Settings, stop: threading.Event) -> None:
@@ -42,7 +42,7 @@ def _audio_loop(pipeline: Pipeline, settings: Settings, stop: threading.Event) -
     if pipeline.transcriber.name == "scripted-fixture" and not settings.api_key:
         pipeline.store.warn(
             "Live mic capture needs MODEL_API_KEY for Muse Voice Transcribe, "
-            "or pip install 'taglish-listener[whisper]' for the open-weights fallback. "
+            "or pip install 'escort[whisper]' for the open-weights fallback. "
             "Use replay for the staged demo."
         )
         return

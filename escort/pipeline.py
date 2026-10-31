@@ -6,13 +6,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from taglish_listener.deixis import detect_deixis
-from taglish_listener.diff import FrameGate
-from taglish_listener.models import CARD_TYPES, CardDraft, CardRecord, Turn, Utterance
-from taglish_listener.prd import parse_sections
-from taglish_listener.sam.fallback import crop_share
-from taglish_listener.spark.rules import RuleSpark, infer_when
-from taglish_listener.store import MeetingStore, new_id, utc_now
+from escort.deixis import detect_deixis
+from escort.diff import FrameGate
+from escort.models import CARD_TYPES, CardDraft, CardRecord, Turn, Utterance
+from escort.prd import parse_sections
+from escort.sam.fallback import crop_share
+from escort.spark.rules import RuleSpark, infer_when
+from escort.store import MeetingStore, new_id, utc_now
 
 
 class Pipeline:
