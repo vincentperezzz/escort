@@ -4,7 +4,7 @@
 
 The state is the product: PRD sections, Me and Them turns, commitments (who, what, when), open items, and the last frame that actually changed. A conflict card is pushed onto the panel on its own, while the line is still going or in the instant after it ends. It cites the PRD section and carries a crop of the screen region as evidence. You do not query for it.
 
-For the hackathon the brain that writes the cards is Muse Spark. Any other MCP client can sit in the same chair. The PRD markdown is passed in full with the turn. There is no vector index.
+For the hackathon the brain that writes the cards is Muse Spark. Any other MCP client can sit in the same chair. Boss's phone-side chat is WhatsApp, through Meta's WhatsApp Cloud API. It is not Messenger, and it does not use a Facebook Page. The PRD markdown is passed in full with the turn. There is no vector index.
 
 ## Consent and retention
 
@@ -20,14 +20,19 @@ Another tool that already watches a screen, such as Screenpipe, can feed this sa
 flowchart LR
   Feed[Turns plus the latest frame] --> State[Meeting state]
   PRD[PRD sections] --> State
-  State --> Push[push_suggestion]
-  Push --> Cards[Conflict, commitment, reply]
-  Cards --> State
-  State --> Panel[Side panel]
+  State --> Cards[Conflict, commitment, reply]
+  Cards --> Panel[Side panel]
+  Cards --> WA[WhatsApp Cloud API]
+  WA --> Phone[Boss on WhatsApp]
+  Phone --> WA
+  WA --> Muse[Muse Spark]
+  Muse --> WA
   State --> MCP[MCP stdio and streamable HTTP]
   MCP --> Brain[Assistant]
   Delete[delete meeting state] --> State
 ```
+
+WhatsApp is only the phone pipe. Muse stays the brain. A card is pushed as an interactive message while the 24-hour customer-service window is open. Outside that window the card waits, and the next inbound text tells Boss to send `start meeting`.
 
 Card types, and only these three:
 
@@ -164,6 +169,47 @@ python -m escort eval --backend muse --audio fixtures/eval/real/01.wav --referen
 `auto` calls Muse Voice Transcribe when `MODEL_API_KEY` is set, otherwise faster-whisper if it is installed. With neither, the script exits 2 and does not report the scripted fixture as a recognition score. `--backend scripted` is labeled `measures_recognition: false`.
 
 The clip is `fixtures/eval/taglish.wav`. The reference is `fixtures/eval/reference.txt`.
+
+## WhatsApp
+
+Boss's phone chat is the WhatsApp Cloud API. Not Messenger. Not a Facebook Page. The Graph host is still `graph.facebook.com`. That is the documented WhatsApp Cloud API host.
+
+`start meeting` is the text that opens the session. It also opens WhatsApp's 24-hour customer-service window, counted from that inbound message. Inside the window, Escort can push `PRD_CONFLICT`, `COMMITMENT`, and `SUGGESTED_REPLY` cards. A conflict or commitment arrives with up to three reply buttons: Push back, Note it, Ignore. Suggested replies arrive as a list. A screen crop is attached as an image when the file is still on disk. Note it writes a commitment. Outside the window, cards are queued. The next message you send is what tells you to text `start meeting`.
+
+```bash
+python -m escort whatsapp --port 8748
+python -m escort whatsapp --demo
+```
+
+`--demo` replays a fake webhook with a mocked Graph API, so you can see the thread without a real number. The live server reads meeting state from `ESCORT_STATE_URL` (default `http://127.0.0.1:8747/panel/state`) and only pushes cards that show up after it starts.
+
+### Setup
+
+1. Create a Meta developer app and add the WhatsApp product. Do not add Messenger. Do not create a Facebook Page for this.
+2. In WhatsApp, API setup, use the free test business number.
+3. Add up to five recipient numbers. One of them is Boss's phone. Those numbers go in `WHATSAPP_ALLOWED_NUMBERS`.
+4. Run the webhook on port 8748 and expose it with a Cloudflare tunnel:
+
+```bash
+python -m escort whatsapp --port 8748
+cloudflared tunnel --url http://127.0.0.1:8748
+```
+
+5. In the app dashboard, set the callback URL to `https://<tunnel-host>/webhook`, set the verify token to the same value as `WHATSAPP_VERIFY_TOKEN`, and subscribe to the `messages` field.
+6. Put the tokens in the environment. Never commit them.
+
+| Variable | Role |
+| --- | --- |
+| `WHATSAPP_VERIFY_TOKEN` | Handshake token you choose |
+| `WHATSAPP_APP_SECRET` | Optional. When set, `X-Hub-Signature-256` is required |
+| `WHATSAPP_ACCESS_TOKEN` | Cloud API token for sending |
+| `WHATSAPP_PHONE_NUMBER_ID` | Test number id, not the display phone number |
+| `WHATSAPP_ALLOWED_NUMBERS` | Comma-separated. Only these numbers get replies |
+| `WHATSAPP_GRAPH_VERSION` | Default `v22.0` |
+| `ESCORT_STATE_URL` | Live meeting snapshot. Default `http://127.0.0.1:8747/panel/state` |
+| `MODEL_API_KEY` | Muse. `META_API_KEY` also works. Unset keeps the local read |
+
+A PDF, Markdown, DOCX, or text file sent in the chat becomes the meeting PRD. Images are stored as context.
 
 ## Staged scenario
 

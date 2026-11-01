@@ -46,6 +46,11 @@ def main(argv: list[str] | None = None) -> None:
     record = sub.add_parser("record")
     record.add_argument("--out", type=Path, default=None)
 
+    whatsapp = sub.add_parser("whatsapp")
+    whatsapp.add_argument("--host", default="127.0.0.1")
+    whatsapp.add_argument("--port", type=int, default=8748)
+    whatsapp.add_argument("--demo", action="store_true")
+
     evaluate = sub.add_parser("eval")
     evaluate.add_argument("--audio", type=Path, default=None)
     evaluate.add_argument("--reference", type=Path, default=None)
@@ -62,6 +67,14 @@ def main(argv: list[str] | None = None) -> None:
         from escort.record_eval import record_scripts
 
         record_scripts(args.out)
+        return
+    if args.cmd == "whatsapp":
+        from escort.whatsapp.server import main as whatsapp_main
+
+        forwarded = ["--host", args.host, "--port", str(args.port)]
+        if args.demo:
+            forwarded.append("--demo")
+        whatsapp_main(forwarded)
         return
     if args.cmd == "replay":
         snapshot = _prepare(args, paced=False)
