@@ -58,8 +58,10 @@ class LiveSession:
         grabber_factory: Callable[[], Any] | None = None,
         audio_factory: Callable[[], Any] | None = None,
         session_factory: Callable[..., Any] | None = None,
+        monitor_source: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.store = store
+        self.monitor_source = monitor_source
         self.settings = settings
         self.prd_text = prd_text
         self.mic_index = parse_device_id(mic_id)
@@ -89,6 +91,7 @@ class LiveSession:
                 grabber_factory=self.grabber_factory,
                 audio_factory=self.audio_factory,
                 session_factory=self.session_factory,
+                monitor_source=self.monitor_source,
             )
         except Exception as exc:
             log.warning("Live capture did not start: %s", exc)

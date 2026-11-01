@@ -99,7 +99,10 @@ def test_start_listening_starts_capture_with_chosen_devices_and_notes(tmp_path, 
     assert "No new fees" in session.prd_text
     assert session.store is runtime.store
     assert on["listening_started_at"] and datetime.fromisoformat(on["listening_started_at"])
-    assert on["screen"] == {"monitoring": True, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0}
+    assert on["screen"] == {
+        "monitoring": True, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0, "monitor": "Display 1",
+    }
+    assert callable(session.kwargs["monitor_source"])
     assert on["capture_error"] is None
 
     client.post("/api/listen", json={"on": True})

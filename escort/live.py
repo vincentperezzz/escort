@@ -1,6 +1,9 @@
 """Live capture: screen frames + Me/Them audio feeding a Pipeline until `stop` is set.
 
-The screen loop samples the primary monitor about once a second. Every grab goes
+The screen loop samples one display about once a second. Which display comes from
+`monitor_source` (re-read every tick, so a change in Settings or chat applies live);
+on a switch the grabber is pointed at the new mss index and the change detector's
+baseline is reset, so the first frame of the new display is kept. Every grab goes
 through Pipeline.ingest_image, whose FrameGate keeps a frame only when it differs
 from the last *kept* frame (dHash distance >= 6 bits or mean grey drift >= 8/255);
 unchanged grabs are only counted. The store keeps just the newest kept frame.
@@ -37,7 +40,12 @@ class LiveStats:
         self.frames_seen = 0
         self.changed_frames = 0
         self.audio_running = False
+        self.monitor: str | None = None
         self.errors: list[str] = []
+
+    def set_monitor(self, label: str | None) -> None:
+        with self._lock:
+            self.monitor = label
 
     def frame(self, changed: bool) -> None:
         with self._lock:
@@ -58,6 +66,7 @@ class LiveStats:
                 "last_frame_at": self.last_frame_at,
                 "frames_seen": self.frames_seen,
                 "changed_frames": self.changed_frames,
+                "monitor": self.monitor,
             }
 
     def error(self) -> str | None:
@@ -88,6 +97,7 @@ def start_live(
     grabber_factory: Callable[[], Any] | None = None,
     audio_factory: Callable[[], Any] | None = None,
     session_factory: Callable[..., Any] | None = None,
+    monitor_source: Callable[[], dict[str, Any]] | None = None,
 ) -> list[threading.Thread]:
     stats = stats or LiveStats()
     pipeline.store.mode = "live"
@@ -96,6 +106,7 @@ def start_live(
         threading.Thread(
             target=_screen_loop,
             args=(pipeline, stop, stats, grabber_factory or _default_grabber),
+            kwargs={"monitor_source": monitor_source},
             name="screen",
             daemon=True,
         ),
@@ -122,7 +133,10 @@ def _screen_loop(
     stop: threading.Event,
     stats: LiveStats | None = None,
     grabber_factory: Callable[[], Any] | None = None,
+    *,
+    monitor_source: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
+    """Grab ~1 frame/s. `monitor_source()` returns {"index": mss index, "label": str}."""
     stats = stats or LiveStats()
     try:
         grabber = (grabber_factory or _default_grabber)()
@@ -132,9 +146,12 @@ def _screen_loop(
         pipeline.store.warn(message)
         return
     stats.monitoring = True
+    current: int | None = None
     try:
         while not stop.is_set():
             started = time.perf_counter()
+            if monitor_source is not None:
+                current = _apply_monitor(grabber, pipeline, stats, monitor_source, current)
             try:
                 changed = pipeline.ingest_image(grabber.grab())
             except Exception as exc:
@@ -152,6 +169,30 @@ def _screen_loop(
             grabber.close()
         except Exception:
             pass
+
+
+def _apply_monitor(
+    grabber: Any,
+    pipeline: Pipeline,
+    stats: LiveStats,
+    monitor_source: Callable[[], dict[str, Any]],
+    current: int | None,
+) -> int | None:
+    """Point the grabber at the chosen display; on a switch, reset the change baseline."""
+    try:
+        target = monitor_source()
+        index = int(target["index"])
+    except Exception:
+        return current  # keep watching what we watch; a bad read never stops the loop
+    stats.set_monitor(target.get("label"))
+    if index == current:
+        return current
+    setter = getattr(grabber, "set_monitor", None)
+    if setter is not None:
+        setter(index)
+    if current is not None:
+        pipeline.gate.reset()
+    return index
 
 
 def _audio_loop(

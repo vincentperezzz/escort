@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, CalendarBlank, FileText, Plus } from "@phosphor-icons/react";
 import Logo from "../components/Logo.jsx";
+import ChangedChips from "../components/ChangedChips.jsx";
 import { post, formatEventWhen } from "../lib/api.js";
 
 const SUGGESTIONS = [
@@ -55,7 +56,9 @@ export default function Chat({ status, refresh, go, seed = "" }) {
     setPending(true);
     try {
       const data = await post("/api/context/chat", { message });
-      const next = Array.isArray(data?.context?.chat) ? data.context.chat : [...optimistic, { role: "assistant", content: data?.reply || "" }];
+      const next = Array.isArray(data?.context?.chat)
+        ? data.context.chat
+        : [...optimistic, { role: "assistant", content: data?.reply || "", changed: data?.changed }];
       setLocal(next);
       setFresh(next.length - 1);
       refresh();
@@ -234,6 +237,7 @@ function Message({ turn, stream, onGrow }) {
       <div className="min-w-0 flex-1 pt-0.5">
         <p className="mb-1.5 text-[12.5px] font-medium text-muted">Muse</p>
         <StreamText text={turn.content || ""} stream={stream} onGrow={onGrow} />
+        <ChangedChips changed={turn.changed} className="mt-3" />
       </div>
     </li>
   );

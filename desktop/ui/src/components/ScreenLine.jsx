@@ -13,6 +13,12 @@ function ago(iso, now) {
   return `${Math.round(m / 60)} h ago`;
 }
 
+/** "Display 2" when there is a choice to make, "your screen" on a one-display machine. */
+function displayName(label, count) {
+  if (!label || count === 1) return "your screen";
+  return label === "All displays" ? "all displays" : label;
+}
+
 /**
  * One quiet line that says whether Escort is looking at the screen. It only
  * claims monitoring when `status.screen.monitoring` is true; a capture error
@@ -45,10 +51,14 @@ export default function ScreenLine({ status, className = "" }) {
   }
   const last = screen.last_frame_at ? ago(screen.last_frame_at, now) : "";
   const title = Number.isFinite(screen.frames_seen) ? `${screen.frames_seen} frames seen, ${screen.changed_frames ?? 0} changed` : undefined;
+  const watched = displayName(screen.monitor, (status?.monitors?.monitors || []).length);
   return (
     <p className={`flex min-w-0 items-center gap-2 text-[12px] text-muted ${className}`} role="status" title={title}>
       <Dot tone="mint" live />
-      <span className="truncate">Watching your screen{last ? ` · last change ${last}` : " · no changes yet"}</span>
+      <span className="truncate">
+        Watching {watched}
+        {last ? ` · last change ${last}` : " · no changes yet"}
+      </span>
     </p>
   );
 }

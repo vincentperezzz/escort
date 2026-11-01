@@ -33,6 +33,11 @@ class FrameGate:
         self.prev_hash: int | None = None
         self.prev_image: Image.Image | None = None
 
+    def reset(self) -> None:
+        """Forget the baseline, so the next frame counts as changed (e.g. after switching display)."""
+        self.prev_hash = None
+        self.prev_image = None
+
     def changed(self, image: Image.Image) -> tuple[bool, str]:
         digest = dhash(image)
         token = f"{digest:016x}"

@@ -2,6 +2,7 @@ import threading
 
 import pytest
 
+from escort.capture import monitors
 from escort.desktop import live_capture
 from escort.live import LiveStats
 
@@ -47,4 +48,9 @@ def no_real_capture_or_keys(monkeypatch):
         return session
 
     monkeypatch.setattr(live_capture, "start_session", start_session)
+    # One 1920x1080 display unless a test says otherwise: never enumerate the real screens.
+    monkeypatch.setattr(monitors, "enumerate_raw", lambda: [dict(ONE_DISPLAY), dict(ONE_DISPLAY)])
     return sessions
+
+
+ONE_DISPLAY = {"left": 0, "top": 0, "width": 1920, "height": 1080}

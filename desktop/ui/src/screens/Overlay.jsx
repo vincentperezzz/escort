@@ -3,6 +3,7 @@ import { CaretDown, CaretUp, Play, Stop, ArrowUp, X, Lightning, ChatCircleText, 
 import Logo from "../components/Logo.jsx";
 import { api, post, mmss, MOCK } from "../lib/api.js";
 import ScreenLine from "../components/ScreenLine.jsx";
+import ChangedChips from "../components/ChangedChips.jsx";
 import OpacitySlider from "../components/OpacitySlider.jsx";
 import { useOverlay } from "../lib/useOverlay.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
@@ -89,7 +90,12 @@ export default function Overlay() {
     setAnswer({ label, pending: true });
     try {
       const data = await post("/api/context/chat", { message: text });
-      setAnswer({ label, text: data?.reply || "No answer came back." });
+      setAnswer({ label, text: data?.reply || "No answer came back.", changed: data?.changed });
+      if (data?.changed?.length) {
+        // A chat command changed a setting: pull the new display / opacity / share state now.
+        refresh();
+        ov.reload();
+      }
     } catch (err) {
       setAnswer({ label, error: `Muse didn't answer (${err.message || "no response"}).` });
     }
@@ -306,7 +312,10 @@ function Answer({ answer, onClose }) {
       ) : answer.error ? (
         <p className="mt-1 text-[13px] text-conflict">{answer.error}</p>
       ) : (
-        <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-ink/90">{answer.text}</p>
+        <>
+          <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-ink/90">{answer.text}</p>
+          <ChangedChips changed={answer.changed} className="mt-2" />
+        </>
       )}
     </article>
   );

@@ -203,8 +203,11 @@ class ContextLibrary:
     def chat_history(self) -> list[dict[str, str]]:
         return list(self.data.get("chat") or [])
 
-    def append_chat(self, role: str, content: str) -> None:
-        self.data.setdefault("chat", []).append({"role": role, "content": content})
+    def append_chat(self, role: str, content: str, changed: list[dict[str, Any]] | None = None) -> None:
+        turn: dict[str, Any] = {"role": role, "content": content}
+        if changed:
+            turn["changed"] = changed  # settings this reply changed, shown as chips under it
+        self.data.setdefault("chat", []).append(turn)
         self.data["chat"] = self.data["chat"][-40:]
         self._save()
 

@@ -6,6 +6,8 @@ from escort.capture.windows_audio import CaptureUnavailable
 
 
 class ScreenGrabber:
+    """Grabs one mss monitor: index >= 1 is a single display, 0 is all displays combined."""
+
     def __init__(self, monitor: int = 1) -> None:
         try:
             import mss
@@ -14,9 +16,12 @@ class ScreenGrabber:
         self._mss = mss.mss()
         self._monitor = monitor
 
+    def set_monitor(self, monitor: int) -> None:
+        self._monitor = int(monitor)
+
     def grab(self) -> Image.Image:
         monitors = self._mss.monitors
-        index = self._monitor if self._monitor < len(monitors) else 1
+        index = self._monitor if 0 <= self._monitor < len(monitors) else 1
         shot = self._mss.grab(monitors[index])
         return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
 

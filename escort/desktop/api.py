@@ -73,6 +73,19 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
             input_focus=flag("input_focus"),
         )
 
+    @app.get("/api/monitors")
+    def monitors() -> dict:
+        return runtime.monitors_status(fresh=True)
+
+    @app.post("/api/monitors", response_model=None)
+    def set_monitor(body: dict) -> dict | JSONResponse:
+        if "selected" not in body:
+            return JSONResponse(status_code=422, content={"error": "selected is required: 'primary', 'all' or a display number"})
+        try:
+            return runtime.set_watch_monitor(body["selected"])
+        except ValueError as err:
+            return JSONResponse(status_code=422, content={"error": str(err)})
+
     @app.get("/api/summary")
     def summary() -> dict:
         return runtime.summary_status()

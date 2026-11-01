@@ -5,15 +5,18 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import httpx
 
+from escort.capture import monitors as monitor_mod
 from escort.context.library import ContextLibrary
 from escort.context.mock_data import mock_import_item
 from escort.context.sources.registry import Connectors
 from escort.context.prep_chat import prep_chat
+from escort.context.settings_intent import describe_settings, handle_settings_message
 from escort.desktop import live_capture
 from escort.desktop.devices import list_audio_devices
 from escort.desktop.overlay import DEFAULT_OPACITY, clamp_opacity
@@ -34,6 +37,7 @@ class MainWindowController(Protocol):
 
 
 IDLE_SCREEN = {"monitoring": False, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0}
+MONITOR_CACHE_S = 3.0
 
 log = logging.getLogger("escort.desktop")
 
@@ -68,8 +72,12 @@ class DesktopRuntime:
         config_path: Path | None = None,
         connectors: Connectors | None = None,
         summary_client: httpx.Client | None = None,
+        monitor_lister: Callable[[], list[dict[str, int]]] | None = None,
     ) -> None:
         self.store = store
+        self._monitor_lister = monitor_lister
+        self._monitor_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._chat_pending: dict[str, Any] | None = None
         self.secrets = secrets or open_secret_store()
         self.config_path = config_path or (config_dir() / "config.json")
         self.listening = False
@@ -121,7 +129,74 @@ class DesktopRuntime:
 
     def screen_status(self) -> dict[str, Any]:
         live = self.live
-        return live.screen() if live is not None else dict(IDLE_SCREEN)
+        screen = live.screen() if live is not None else dict(IDLE_SCREEN)
+        # The loop reports what it is grabbing; before its first tick (or when idle) say what it will grab.
+        return {**screen, "monitor": screen.get("monitor") or self._watch_target()["label"]}
+
+    # --- watched display -------------------------------------------------------
+
+    def list_monitors(self, fresh: bool = False) -> list[dict[str, Any]]:
+        cached = self._monitor_cache
+        if not fresh and cached is not None and time.monotonic() - cached[0] < MONITOR_CACHE_S:
+            return cached[1]
+        found = monitor_mod.list_monitors(self._monitor_lister or monitor_mod.enumerate_raw)
+        self._monitor_cache = (time.monotonic(), found)
+        return found
+
+    @property
+    def watch_choice(self) -> Any:
+        try:
+            return monitor_mod.normalize_choice(self.prefs.get("watch_monitor", monitor_mod.PRIMARY))
+        except ValueError:
+            return monitor_mod.PRIMARY
+
+    def _watch_target(self) -> dict[str, Any]:
+        """Polled by the screen loop every tick, so a new choice applies live."""
+        return monitor_mod.resolve(self.watch_choice, self.list_monitors())
+
+    def monitors_status(self, fresh: bool = False) -> dict[str, Any]:
+        monitors = self.list_monitors(fresh=fresh)
+        effective = monitor_mod.resolve(self.watch_choice, monitors)
+        return {
+            "monitors": monitors,
+            "selected": self.watch_choice,
+            "effective": effective,
+            "notice": effective["notice"],
+            "overlay_on_watched": self._overlay_on_watched(effective, monitors),
+        }
+
+    def set_watch_monitor(self, selected: Any) -> dict[str, Any]:
+        """Persist the watched display; a running screen loop picks it up on its next tick.
+
+        Raises ValueError for anything that is not 'primary', 'all' or a connected display.
+        """
+        choice = monitor_mod.normalize_choice(selected)
+        monitors = self.list_monitors(fresh=True)
+        if isinstance(choice, int) and monitors and not any(item["index"] == choice for item in monitors):
+            count = len(monitors)
+            raise ValueError(f"There is no Display {choice}; this machine has {count} display{'s' if count != 1 else ''}.")
+        with self._lock:
+            if self.prefs.get("watch_monitor") != choice:
+                self.prefs["watch_monitor"] = choice
+                self._write_prefs()
+        self._notify()
+        return self.monitors_status()
+
+    def _overlay_on_watched(self, effective: dict[str, Any], monitors: list[dict[str, Any]]) -> bool | None:
+        """True when the overlay window overlaps the watched display; None when unknown."""
+        getter = getattr(self.overlay, "window_rect", None)
+        if getter is None or not self.overlay_visible:
+            return None
+        try:
+            rect = getter()
+        except Exception:
+            return None
+        if rect is None:
+            return None
+        if effective["index"] == monitor_mod.ALL_INDEX:
+            return True
+        watched = next((item for item in monitors if item["index"] == effective["index"]), None)
+        return monitor_mod.rects_overlap(rect, watched) if watched else None
 
     def capture_error(self) -> str | None:
         live = self.live
@@ -144,7 +219,9 @@ class DesktopRuntime:
                 "whatsapp_allowed_numbers": self.prefs.get("whatsapp_allowed_numbers", ""),
                 "whatsapp_graph_version": self.prefs.get("whatsapp_graph_version", "v22.0"),
                 "google_client_id": self.prefs.get("google_client_id", ""),
+                "watch_monitor": self.watch_choice,
             },
+            "monitors": self.monitors_status(),
             "devices": list_audio_devices(),
             "meeting": snapshot,
             "context": self.context.public_view(),
@@ -208,11 +285,25 @@ class DesktopRuntime:
         return self.public_status()
 
     def context_chat(self, message: str) -> dict[str, Any]:
+        """Prep chat and overlay ask box. Settings requests are handled here, before Muse."""
         with self._lock:
+            pending, self._chat_pending = self._chat_pending, None
             self.context.append_chat("user", message)
-            answer = prep_chat(message, self.context.combined_markdown(), self.context.chat_history())
-            self.context.append_chat("assistant", answer)
-        return {"reply": answer, "context": self.context.public_view()}
+            settings_reply = handle_settings_message(message, self, pending)
+            changed: list[dict[str, Any]] = []
+            if settings_reply is not None:
+                answer = settings_reply.reply
+                changed = settings_reply.changed
+                self._chat_pending = settings_reply.pending
+            else:
+                answer = prep_chat(
+                    message,
+                    self.context.combined_markdown(),
+                    self.context.chat_history(),
+                    settings_note=describe_settings(self),
+                )
+            self.context.append_chat("assistant", answer, changed=changed or None)
+        return {"reply": answer, "changed": changed, "context": self.context.public_view()}
 
     def load_demo(self) -> dict[str, Any]:
         scenario = load_scenario()
@@ -281,6 +372,7 @@ class DesktopRuntime:
                 mic_id=self.prefs.get("mic_id"),
                 loopback_id=self.prefs.get("loopback_id"),
                 on_pipeline=lambda: self.context.apply_to_store(self.store),
+                monitor_source=self._watch_target,
             )
         except Exception as exc:
             log.warning("Live capture failed to start: %s", exc)

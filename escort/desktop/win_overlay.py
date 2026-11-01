@@ -246,6 +246,19 @@ def focus_window(hwnd: int | None) -> bool:
         return False
 
 
+def window_rect(hwnd: int | None) -> tuple[int, int, int, int] | None:
+    """(left, top, right, bottom) in screen pixels, or None."""
+    if not hwnd or not is_windows():
+        return None
+    try:
+        rect = wintypes.RECT()
+        if _user32().GetWindowRect(hwnd, ctypes.byref(rect)):
+            return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+    except Exception:
+        pass
+    return None
+
+
 def hide(hwnd: int | None) -> bool:
     if not hwnd or not is_windows():
         return False

@@ -28,7 +28,7 @@ const state = {
   listening: params.get("mock") === "live",
   listening_started_at: new Date(Date.now() - 754000).toISOString(),
   overlay: {
-    hide_from_share: true,
+    hide_from_share: params.get("share") !== "off",
     visible: true,
     supported: params.get("mock") !== "unsupported",
     collapsed: params.get("collapsed") === "1",
@@ -82,6 +82,57 @@ const state = {
   },
 };
 
+// ?monitors=1 for a single display; default is a laptop with an external screen to its left.
+const DISPLAYS = params.get("monitors") === "1"
+  ? [{ index: 1, left: 0, top: 0, width: 2560, height: 1440 }]
+  : [
+      { index: 1, left: 0, top: 0, width: 2560, height: 1440 },
+      { index: 2, left: -1920, top: 180, width: 1920, height: 1080 },
+    ];
+const MONITORS = DISPLAYS.map((m) => ({
+  ...m,
+  name: `Display ${m.index}`,
+  label: `Display ${m.index} · ${m.width}×${m.height}`,
+  primary: m.index === 1,
+}));
+state.watch = params.get("watch") === "all" ? "all" : Number(params.get("watch")) || "primary";
+
+function monitorsStatus() {
+  const pick = state.watch;
+  let effective;
+  if (pick === "all" && MONITORS.length > 1) effective = { selected: "all", index: 0, label: "All displays", notice: null };
+  else {
+    const found = MONITORS.find((m) => m.index === pick) || MONITORS[0];
+    effective = { selected: pick, index: found.index, label: found.name, notice: null };
+  }
+  return { monitors: MONITORS, selected: pick, effective, notice: null, overlay_on_watched: state.overlay.visible ? effective.index !== 2 : null };
+}
+
+/** Tiny stand-in for escort/context/settings_intent.py so the chips can be seen in ?mock. */
+function mockSettingsReply(message) {
+  const text = message.toLowerCase();
+  const number = text.match(/(?:monitor|screen|display)\s*(\d)/)?.[1] || (/\bsecond\b/.test(text) ? "2" : null);
+  let pick = null;
+  if (/\ball (screens|displays|monitors)\b/.test(text)) pick = "all";
+  else if (/\bmain\b|\bprimary\b/.test(text)) pick = "primary";
+  else if (number) pick = Number(number);
+  if (pick !== null) {
+    if (typeof pick === "number" && !MONITORS.some((m) => m.index === pick)) {
+      return { reply: `I only see ${MONITORS.length} display${MONITORS.length > 1 ? "s" : ""}, so there's no Display ${pick}.`, changed: [] };
+    }
+    state.watch = pick;
+    const label = monitorsStatus().effective.label;
+    return { reply: `Done, I'm watching ${pick === "all" ? "all displays" : label} now.`, changed: [{ setting: "watch_monitor", value: pick, label: `Watching ${label}` }] };
+  }
+  const pct = text.match(/(\d{1,3})\s*%/);
+  if (pct && /opacity|overlay/.test(text)) {
+    state.overlay.opacity = Math.max(0.3, Math.min(1, Number(pct[1]) / 100));
+    const shown = Math.round(state.overlay.opacity * 100);
+    return { reply: `Done, the overlay is at ${shown}% opacity now.`, changed: [{ setting: "overlay_opacity", value: state.overlay.opacity, label: `Overlay ${shown}% opacity` }] };
+  }
+  return null;
+}
+
 const providers = [
   { id: "google", label: "Google", connected: false, account: "", mode: "mock", configured: true, setup_hint: "" },
   { id: "notion", label: "Notion", connected: true, account: "BayaniPay workspace", mode: "mock", configured: true, setup_hint: "" },
@@ -98,7 +149,9 @@ function status() {
       last_frame_at: new Date(Date.now() - 3000).toISOString(),
       frames_seen: 142,
       changed_frames: 11,
+      monitor: monitorsStatus().effective.label,
     },
+    monitors: monitorsStatus(),
     capture_error: params.get("capture") === "error" ? "Screen capture is blocked by another app. Escort will keep retrying." : null,
     listening_started_at: state.listening ? state.listening_started_at : null,
     has_meta_key: true,
@@ -145,12 +198,26 @@ export async function handle(path, options = {}) {
     if (state.listening) state.listening_started_at = new Date().toISOString();
     return status();
   }
+  if (path === "/api/monitors") {
+    if (method === "POST") {
+      const pick = body.selected === "all" || body.selected === "primary" ? body.selected : Number(body.selected);
+      if (typeof pick === "number" && !MONITORS.some((m) => m.index === pick)) {
+        const err = new Error(`There is no Display ${body.selected}.`);
+        err.status = 422;
+        throw err;
+      }
+      state.watch = pick;
+    }
+    return monitorsStatus();
+  }
   if (path === "/api/context/chat") {
-    await wait(1100);
+    const settings = mockSettingsReply(body.message || "");
+    await wait(settings ? 250 : 1100);
     state.context.chat = [...state.context.chat, { role: "user", content: body.message }];
-    const reply = REPLIES[state.context.chat.length % REPLIES.length];
-    state.context.chat = [...state.context.chat, { role: "assistant", content: reply }];
-    return { reply, context: state.context };
+    const reply = settings?.reply || REPLIES[state.context.chat.length % REPLIES.length];
+    const changed = settings?.changed || [];
+    state.context.chat = [...state.context.chat, { role: "assistant", content: reply, ...(changed.length ? { changed } : {}) }];
+    return { reply, changed, context: state.context };
   }
   if (path.startsWith("/api/cards/")) {
     if (body.action === "ignore") state.meeting.cards = state.meeting.cards.filter((c) => !path.includes(`/${c.id}/`));

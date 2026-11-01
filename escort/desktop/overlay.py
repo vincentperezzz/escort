@@ -226,6 +226,12 @@ class OverlayWindow:
 
         self._on_gui(apply)
 
+    def window_rect(self) -> tuple[int, int, int, int] | None:
+        """Where the overlay sits on screen (None before it has been shown)."""
+        if not self._placed:
+            return None
+        return win_overlay.window_rect(self.hwnd)
+
     def destroy(self) -> None:
         try:
             self.window.destroy()

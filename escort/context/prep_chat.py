@@ -6,7 +6,13 @@ from escort.settings import Settings, load_settings
 from escort.spark.muse import spark_model_name
 
 
-def prep_chat(message: str, context_markdown: str, history: list[dict[str, str]], http: httpx.Client | None = None) -> str:
+def prep_chat(
+    message: str,
+    context_markdown: str,
+    history: list[dict[str, str]],
+    http: httpx.Client | None = None,
+    settings_note: str = "",
+) -> str:
     settings = load_settings()
     if not settings.api_key:
         return (
@@ -23,6 +29,9 @@ def prep_chat(message: str, context_markdown: str, history: list[dict[str, str]]
         f"USER:\n{message}\n\n"
         "Reply with one or two short paragraphs. No bullet lists unless asked."
     )
+    system = "Pre-meeting prep only. Be concrete and cite note headings when useful."
+    if settings_note:
+        system = f"{system}\n\n{settings_note}"
     client = http or httpx.Client(timeout=60)
     owns = http is None
     try:
@@ -37,7 +46,7 @@ def prep_chat(message: str, context_markdown: str, history: list[dict[str, str]]
                 "reasoning_effort": "minimal",
                 "max_completion_tokens": 1600,
                 "messages": [
-                    {"role": "system", "content": "Pre-meeting prep only. Be concrete and cite note headings when useful."},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
             },

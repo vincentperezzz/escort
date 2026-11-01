@@ -4,6 +4,7 @@ import { Bezel, Button, Field, Kbd, Pill, Select, Toggle } from "../components/u
 import ConnectAccounts from "../components/ConnectAccounts.jsx";
 import { post } from "../lib/api.js";
 import OpacitySlider from "../components/OpacitySlider.jsx";
+import MonitorPicker from "../components/MonitorPicker.jsx";
 import { useOverlay } from "../lib/useOverlay.js";
 
 const SECTIONS = [
@@ -149,6 +150,10 @@ function General({ status, refresh }) {
 
   return (
     <>
+      <Group title="Screen to watch" hint="Escort reads one display about once a second. You can also ask in chat, like “watch monitor 2”.">
+        <MonitorPicker status={status} refresh={refresh} hideFromShare={overlay.available === false ? undefined : overlay.hide_from_share} />
+      </Group>
+
       <Group title="Window">
         <Row
           title="Hide from screen share"
