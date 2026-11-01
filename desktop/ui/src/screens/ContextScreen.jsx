@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { UploadSimple, Trash, PaperPlaneRight, CaretDown } from "@phosphor-icons/react";
-import { Button, Panel, PageHeader, Pill } from "../components/ui.jsx";
+import { UploadSimple, Trash, CaretDown, ArrowUpRight, Sparkle, MagnifyingGlass } from "@phosphor-icons/react";
+import { Bezel, Button, Panel, PageHeader, Pill } from "../components/ui.jsx";
 import ConnectAccounts from "../components/ConnectAccounts.jsx";
 import { api, apiUpload, post, formatEventWhen } from "../lib/api.js";
 
-export default function ContextScreen({ status, refresh }) {
+export default function ContextScreen({ status, refresh, go }) {
   const ctx = status?.context || {};
   const sections = status?.meeting?.prd_sections || [];
   const [paste, setPaste] = useState("");
@@ -15,13 +15,11 @@ export default function ContextScreen({ status, refresh }) {
   const [driveHits, setDriveHits] = useState([]);
   const [proposals, setProposals] = useState(ctx.prep?.proposals || []);
   const [picked, setPicked] = useState(new Set(ctx.prep?.confirmed_ids || []));
-  const [chatIn, setChatIn] = useState("");
-  const [chatBusy, setChatBusy] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const prepEventId = ctx.prep?.selected_event_id;
   const prepEvent = (ctx.upcoming || []).find((e) => e.id === prepEventId);
   const items = ctx.items || [];
-  const chat = ctx.chat || [];
+  const chatCount = (ctx.chat || []).length;
 
   useEffect(() => {
     setProposals(ctx.prep?.proposals || []);
@@ -62,18 +60,6 @@ export default function ContextScreen({ status, refresh }) {
     await post("/api/context/prep", { event_id: prepEventId, item_ids: [...picked] });
     refresh();
   }
-  async function sendChat(event) {
-    event.preventDefault();
-    if (!chatIn.trim()) return;
-    setChatBusy(true);
-    try {
-      await post("/api/context/chat", { message: chatIn });
-      setChatIn("");
-      refresh();
-    } finally {
-      setChatBusy(false);
-    }
-  }
   function togglePick(id) {
     setPicked((current) => {
       const next = new Set(current);
@@ -88,78 +74,77 @@ export default function ContextScreen({ status, refresh }) {
 
   return (
     <div className="mx-auto max-w-6xl">
-      <PageHeader
-        title="Context"
-        lede="Everything Escort checks the call against. Upload docs, pull from Notion and Drive, then prep the next meeting."
-      >
-        <Button variant="secondary" size="sm" aria-expanded={showConnect} onClick={() => setShowConnect((v) => !v)}>
+      <PageHeader title="Context" lede="Everything Escort checks the call against. Upload docs, pull from Notion and Drive, then prep the next meeting.">
+        <Button variant="secondary" aria-expanded={showConnect} onClick={() => setShowConnect((v) => !v)}>
           Connect accounts
-          <CaretDown size={14} aria-hidden className={showConnect ? "rotate-180" : ""} />
+          <CaretDown size={14} aria-hidden className={`transition-transform duration-500 ease-glass ${showConnect ? "rotate-180" : ""}`} />
         </Button>
       </PageHeader>
 
       {showConnect ? (
-        <div className="mb-6 rounded-xl border border-line bg-bg p-4">
+        <Bezel className="rise mb-8" coreClassName="p-6">
           <ConnectAccounts compact onChange={refresh} />
-        </div>
+        </Bezel>
       ) : anyDemo ? (
-        <p className="mb-6 flex flex-wrap items-center gap-2 text-sm text-muted">
+        <p className="mb-8 flex flex-wrap items-center gap-2.5 text-sm text-muted">
           <Pill tone="warn">Demo data</Pill>
           Searches below return fictional BayaniPay fixtures until you connect real accounts.
-          <button type="button" className="font-semibold text-accent hover:underline" onClick={() => setShowConnect(true)}>
+          <button type="button" className="font-medium text-[#c6bfff] underline-offset-4 hover:underline" onClick={() => setShowConnect(true)}>
             Connect accounts
           </button>
         </p>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-4">
-          <div
-            className={`rounded-xl border-2 border-dashed px-5 py-7 text-center transition-colors ${
-              drag ? "border-accent bg-accent-soft" : "border-line-strong bg-surface"
-            }`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDrag(true);
-            }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDrag(false);
-              if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
-            }}
-          >
-            <UploadSimple size={26} className="mx-auto text-muted" aria-hidden />
-            <p className="mt-2 text-sm font-medium">Drop PDF, DOCX, MD, or TXT here</p>
-            <p className="mt-0.5 text-xs text-muted">Split by headings, kept for this meeting only</p>
-            <label className="press mt-4 inline-flex h-10 cursor-pointer items-center rounded-lg bg-accent px-4 text-sm font-semibold text-accent-ink focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
-              Choose files
-              <input
-                type="file"
-                className="sr-only"
-                accept=".pdf,.docx,.md,.txt,application/pdf,text/plain,text/markdown"
-                multiple
-                onChange={(e) => e.target.files?.length && uploadFiles(e.target.files)}
-              />
-            </label>
-          </div>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-5">
+          <Bezel coreClassName="p-0">
+            <div
+              className={`rounded-[22px] px-6 py-10 text-center transition-colors duration-300 ease-glass ${drag ? "bg-accent-soft" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDrag(true);
+              }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDrag(false);
+                if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
+              }}
+            >
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/[0.05] hairline">
+                <UploadSimple size={20} className="text-ink/80" aria-hidden />
+              </span>
+              <p className="mt-4 text-[15px] font-medium">Drop PDF, DOCX, MD, or TXT here</p>
+              <p className="mt-1 text-[13px] text-muted">Split by headings, kept for this meeting only</p>
+              <label className="press group mt-6 inline-flex h-10 cursor-pointer items-center gap-2 rounded-full bg-ink pl-5 pr-5 text-sm font-medium text-bg hover:bg-white focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
+                Choose files
+                <input
+                  type="file"
+                  className="sr-only"
+                  accept=".pdf,.docx,.md,.txt,application/pdf,text/plain,text/markdown"
+                  multiple
+                  onChange={(e) => e.target.files?.length && uploadFiles(e.target.files)}
+                />
+              </label>
+            </div>
+          </Bezel>
 
-          <form onSubmit={savePaste} className="space-y-2">
-            <label className="block">
-              <span className="text-sm font-medium">Paste scope notes</span>
+          <Panel title="Paste scope notes" hint="Markdown headings become sections Live cards can cite.">
+            <form onSubmit={savePaste} className="space-y-3">
               <textarea
-                className="mt-1.5 min-h-[110px] w-full resize-y rounded-lg border border-line-strong bg-raised p-3 text-sm leading-relaxed placeholder:text-faint"
+                className="field scroll-thin min-h-[120px] w-full resize-y p-4 text-sm leading-relaxed"
                 value={paste}
                 onChange={(e) => setPaste(e.target.value)}
+                aria-label="Scope notes"
                 placeholder={"## Phase 2: Payment integration\nShips after KYC go-live.\n- No fee changes on this call"}
               />
-            </label>
-            <Button type="submit" disabled={!paste.trim()}>
-              Add pasted notes
-            </Button>
-          </form>
+              <Button type="submit" disabled={!paste.trim()}>
+                Add pasted notes
+              </Button>
+            </form>
+          </Panel>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-5 md:grid-cols-2">
             <SearchBox title="Notion" query={notionQ} onQuery={setNotionQ} onSearch={() => search("notion", notionQ, setNotionHits)} hits={notionHits} onImport={(id) => importHit("notion", id)} />
             <SearchBox title="Drive" query={driveQ} onQuery={setDriveQ} onSearch={() => search("drive", driveQ, setDriveHits)} hits={driveHits} onImport={(id) => importHit("drive", id)} />
           </div>
@@ -175,18 +160,18 @@ export default function ContextScreen({ status, refresh }) {
                 </Button>
               </div>
               {proposals.length === 0 ? (
-                <p className="text-sm text-muted">Press Prep on Live, or Re-match, to propose docs from the title, attendees, and hints.</p>
+                <p className="text-sm text-muted">Press Prep on Home, or Re-match, to propose docs from the title, attendees, and hints.</p>
               ) : (
                 <ul className="space-y-2">
                   {proposals.map((p) => (
                     <li key={p.item_id}>
-                      <label className="flex cursor-pointer gap-3 rounded-lg border border-line bg-raised px-3 py-2.5 text-sm">
-                        <input type="checkbox" checked={picked.has(p.item_id)} onChange={() => togglePick(p.item_id)} className="mt-1 h-4 w-4 accent-[var(--accent)]" />
+                      <label className="flex cursor-pointer gap-3 rounded-2xl bg-white/[0.03] px-4 py-3 text-sm hairline hover:bg-white/[0.05]">
+                        <input type="checkbox" checked={picked.has(p.item_id)} onChange={() => togglePick(p.item_id)} className="mt-0.5 h-4 w-4 accent-[var(--accent)]" />
                         <span>
                           <span className="block font-medium">
                             {p.source_label}: {p.title}
                           </span>
-                          <span className="block text-xs text-muted">{p.reason}</span>
+                          <span className="mt-0.5 block text-xs text-muted">{p.reason}</span>
                         </span>
                       </label>
                     </li>
@@ -197,20 +182,25 @@ export default function ContextScreen({ status, refresh }) {
           ) : null}
         </div>
 
-        <aside className="space-y-4">
+        <aside className="space-y-5">
           <Panel title="Library" hint={items.length ? `${items.length} item${items.length === 1 ? "" : "s"}` : undefined}>
             {items.length === 0 ? (
               <p className="text-sm text-muted">Nothing yet. Upload a file or import from Notion or Drive.</p>
             ) : (
-              <ul className="scroll-thin -mx-1 max-h-64 divide-y divide-line overflow-auto px-1">
+              <ul className="scroll-thin -mx-1 flex max-h-72 flex-col gap-1 overflow-auto px-1">
                 {items.map((item) => (
-                  <li key={item.id} className="flex items-start justify-between gap-2 py-2">
+                  <li key={item.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 hover:bg-white/[0.03]">
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-accent">{item.source_label}</p>
-                      <p className="truncate text-sm font-medium">{item.title}</p>
+                      <p className="text-[11.5px] font-medium text-[#c6bfff]">{item.source_label}</p>
+                      <p className="truncate text-sm">{item.title}</p>
                     </div>
-                    <button type="button" onClick={() => removeItem(item.id)} className="rounded-md p-1.5 text-muted hover:bg-conflict-soft hover:text-conflict" aria-label={`Remove ${item.title}`}>
-                      <Trash size={16} aria-hidden />
+                    <button
+                      type="button"
+                      onClick={() => removeItem(item.id)}
+                      className="press grid h-8 w-8 shrink-0 place-items-center rounded-full text-faint hover:bg-conflict-soft hover:text-conflict"
+                      aria-label={`Remove ${item.title}`}
+                    >
+                      <Trash size={15} aria-hidden />
                     </button>
                   </li>
                 ))}
@@ -224,7 +214,7 @@ export default function ContextScreen({ status, refresh }) {
             ) : (
               <ul className="scroll-thin flex max-h-40 flex-wrap gap-1.5 overflow-auto">
                 {sections.map((section) => (
-                  <li key={section.anchor + section.heading} className="rounded-md bg-accent-soft px-2 py-1 text-xs font-medium text-accent">
+                  <li key={section.anchor + section.heading} className="rounded-full bg-accent-soft px-2.5 py-1 text-xs text-[#c6bfff]">
                     {section.source_label || `Notes: ${section.heading}`}
                   </li>
                 ))}
@@ -232,38 +222,20 @@ export default function ContextScreen({ status, refresh }) {
             )}
           </Panel>
 
-          <Panel title="Prep chat" hint="Ask Muse what to watch for.">
-            <div className="scroll-thin max-h-64 min-h-[7rem] space-y-2 overflow-auto text-sm">
-              {chat.length === 0 ? (
-                <p className="text-muted">Try: Ano ang dapat kong bantayan sa call na to?</p>
-              ) : (
-                chat.map((turn, i) => (
-                  <p
-                    key={i}
-                    className={
-                      turn.role === "user"
-                        ? "ml-8 rounded-xl rounded-br-sm bg-accent-soft px-3 py-2"
-                        : "mr-8 rounded-xl rounded-bl-sm bg-sunken px-3 py-2 leading-relaxed"
-                    }
-                  >
-                    {turn.content}
-                  </p>
-                ))
-              )}
-            </div>
-            <form onSubmit={sendChat} className="flex gap-2">
-              <input
-                className="h-10 min-w-0 flex-1 rounded-lg border border-line-strong bg-raised px-3 text-sm placeholder:text-faint"
-                value={chatIn}
-                onChange={(e) => setChatIn(e.target.value)}
-                placeholder="What should I watch for?"
-                aria-label="Message Muse"
-              />
-              <Button type="submit" variant="primary" disabled={chatBusy || !chatIn.trim()} aria-label="Send">
-                <PaperPlaneRight size={16} aria-hidden />
-              </Button>
-            </form>
-          </Panel>
+          <button type="button" onClick={() => go("chat")} className="bezel bezel-sm lift group block w-full text-left">
+            <span className="bezel-core flex items-center gap-4 p-5">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-accent-soft text-[#c6bfff]">
+                <Sparkle size={19} aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-medium">Prep chat</span>
+                <span className="block text-[13px] text-muted">
+                  {chatCount ? `${chatCount} message${chatCount === 1 ? "" : "s"} so far` : "Ask Muse what to watch for"}
+                </span>
+              </span>
+              <ArrowUpRight size={17} className="btn-icon text-faint group-hover:text-ink" aria-hidden />
+            </span>
+          </button>
         </aside>
       </div>
     </div>
@@ -274,27 +246,30 @@ function SearchBox({ title, query, onQuery, onSearch, hits, onImport }) {
   return (
     <Panel title={title}>
       <form
-        className="flex gap-2"
+        className="field flex items-center gap-2 py-1 pl-4 pr-1"
         onSubmit={(e) => {
           e.preventDefault();
           onSearch();
         }}
       >
+        <MagnifyingGlass size={16} className="shrink-0 text-faint" aria-hidden />
         <input
-          className="h-10 min-w-0 flex-1 rounded-lg border border-line-strong bg-raised px-3 text-sm"
+          className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none focus-visible:outline-none"
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           aria-label={`Search ${title}`}
         />
-        <Button type="submit">Search</Button>
+        <Button type="submit" size="sm">
+          Search
+        </Button>
       </form>
       {hits.length ? (
-        <ul className="divide-y divide-line">
+        <ul className="flex flex-col gap-1.5">
           {hits.map((hit) => (
-            <li key={hit.id} className="py-2.5">
+            <li key={hit.id} className="rounded-2xl bg-white/[0.025] px-4 py-3 hairline">
               <p className="text-sm font-medium">{hit.title}</p>
-              <p className="line-clamp-2 text-xs text-muted">{hit.snippet}</p>
-              <button type="button" onClick={() => onImport(hit.id)} className="mt-1.5 text-xs font-semibold text-accent hover:underline">
+              <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted">{hit.snippet}</p>
+              <button type="button" onClick={() => onImport(hit.id)} className="mt-2 text-xs font-medium text-[#c6bfff] underline-offset-4 hover:underline">
                 Import
               </button>
             </li>

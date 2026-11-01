@@ -1,121 +1,197 @@
-import { useEffect, useState } from "react";
-import { Waveform, FileText, ListChecks, Plugs, SlidersHorizontal } from "@phosphor-icons/react";
-import { api } from "./lib/api.js";
+import { useCallback, useEffect, useState } from "react";
+import { IconContext, House, Sparkle, Waveform, FileText, ListChecks, GearSix } from "@phosphor-icons/react";
+import { api, post } from "./lib/api.js";
+import Logo, { logoSvg } from "./components/Logo.jsx";
+import Home from "./screens/Home.jsx";
+import Chat from "./screens/Chat.jsx";
 import Live from "./screens/Live.jsx";
 import ContextScreen from "./screens/ContextScreen.jsx";
 import Recap from "./screens/Recap.jsx";
-import Setup from "./screens/Setup.jsx";
 import Settings from "./screens/Settings.jsx";
+import Overlay from "./screens/Overlay.jsx";
 
 const NAV = [
+  { id: "home", label: "Home", Icon: House },
+  { id: "chat", label: "Prep chat", Icon: Sparkle },
   { id: "live", label: "Live", Icon: Waveform },
   { id: "context", label: "Context", Icon: FileText },
   { id: "recap", label: "Recap", Icon: ListChecks },
-  { id: "setup", label: "Setup", Icon: Plugs },
-  { id: "settings", label: "Settings", Icon: SlidersHorizontal },
+  { id: "settings", label: "Settings", Icon: GearSix },
 ];
 
-function route() {
-  let name = window.location.hash.replace("#/", "") || "live";
-  if (name === "prd" || name === "notes") name = "context";
-  return NAV.some(({ id }) => id === name) ? name : "live";
+const LEGACY = { prd: ["context"], notes: ["context"], setup: ["settings", "connections"] };
+
+function parseRoute() {
+  const [rawName = "", sub = ""] = window.location.hash.replace(/^#\/?/, "").split("/");
+  const [name, legacySub] = LEGACY[rawName] || [rawName];
+  if (name === "overlay") return { name, sub: "" };
+  return NAV.some(({ id }) => id === name) ? { name, sub: sub || legacySub || "" } : { name: "home", sub: "" };
 }
 
 export default function App() {
-  const [screen, setScreen] = useState(route);
+  const [route, setRoute] = useState(parseRoute);
+
+  useEffect(() => {
+    const onHash = () => {
+      const next = parseRoute();
+      document.documentElement.classList.toggle("overlay-mode", next.name === "overlay");
+      setRoute(next);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  return (
+    <IconContext.Provider value={{ weight: "light", size: 18 }}>
+      {route.name === "overlay" ? <Overlay /> : <Shell route={route} />}
+    </IconContext.Provider>
+  );
+}
+
+function useFaviconState(live) {
+  useEffect(() => {
+    const link = document.querySelector('link[rel="icon"]');
+    if (!link) return;
+    link.href = live ? `data:image/svg+xml,${encodeURIComponent(logoSvg("live"))}` : "./favicon.svg";
+  }, [live]);
+}
+
+function Shell({ route }) {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState("");
   const [transcriptOpen, setTranscriptOpen] = useState(true);
+  const screen = route.name;
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       setStatus(await api("/api/status"));
       setError("");
     } catch (err) {
       setError(err.message || "Escort is quiet");
     }
-  }
-
-  useEffect(() => {
-    const onHash = () => setScreen(route());
-    window.addEventListener("hashchange", onHash);
-    refresh();
-    const id = setInterval(refresh, 1500);
-    return () => {
-      window.removeEventListener("hashchange", onHash);
-      clearInterval(id);
-    };
   }, []);
 
-  function go(next) {
-    window.location.hash = `/${next}`;
-    setScreen(next);
-  }
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 1500);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  const go = useCallback((next, sub = "") => {
+    window.location.hash = sub ? `/${next}/${sub}` : `/${next}`;
+  }, []);
+
+  const listening = Boolean(status?.listening);
+
+  const setListening = useCallback(
+    async (on) => {
+      await post("/api/listen", { on });
+      if (on) post("/api/overlay", { visible: true }).catch(() => {});
+      await refresh();
+    },
+    [refresh],
+  );
+
+  // Ctrl+Shift+E shows or hides the overlay. The backend registers it system-wide
+  // (which swallows the keystroke); this only fires if that registration failed.
+  useEffect(() => {
+    async function onKey(event) {
+      if (!(event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === "e")) return;
+      event.preventDefault();
+      try {
+        const current = await api("/api/overlay");
+        await post("/api/overlay", { visible: !current?.visible });
+      } catch {
+        /* overlay endpoint not available in this build */
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useFaviconState(listening);
 
   const ctx = status?.context || {};
   const badge = ctx.items?.length || (status?.meeting?.prd_sections || []).length;
-  const listening = status?.listening;
+  const cardCount = (status?.meeting?.cards || []).length;
 
   return (
-    <div className="flex h-full flex-col md:flex-row">
-      <aside className="order-2 flex shrink-0 items-center gap-1 bg-[var(--rail)] px-2 py-1.5 text-[var(--rail-ink)] md:order-1 md:w-[88px] md:flex-col md:px-2 md:py-5">
-        <div className="hidden flex-col items-center gap-1 md:flex">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent text-lg font-bold text-accent-ink" aria-hidden>
-            E
-          </span>
-          <span className="text-[11px] font-semibold tracking-wide">Escort</span>
-        </div>
-        <nav aria-label="Primary" className="flex flex-1 justify-around gap-1 md:mt-7 md:flex-none md:flex-col md:justify-start">
+    <div className="relative flex h-full flex-col">
+      <div className="ambient" aria-hidden />
+
+      <header className="relative z-20 flex shrink-0 justify-center px-4 pt-4">
+        <nav aria-label="Primary" className="glass flex w-max max-w-full items-center gap-1 rounded-full p-1.5">
+          <button
+            type="button"
+            onClick={() => go("home")}
+            className="press mr-1 flex items-center gap-2.5 rounded-full py-0.5 pl-0.5 pr-3"
+            aria-label="Escort home"
+          >
+            <Logo state={listening ? "live" : "idle"} size={30} />
+            <span className="hidden text-[13.5px] font-semibold tracking-[-0.01em] sm:inline">Escort</span>
+          </button>
+          <span className="mr-1 hidden h-5 w-px bg-white/10 sm:block" aria-hidden />
           {NAV.map(({ id, label, Icon }) => {
             const active = screen === id;
+            const count = id === "context" ? badge : id === "live" ? cardCount : 0;
             return (
               <button
                 key={id}
                 type="button"
                 onClick={() => go(id)}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium transition-colors md:flex-none md:py-2.5 ${
-                  active ? "bg-white/12 text-white" : "text-[var(--rail-muted)] hover:bg-white/8 hover:text-white"
+                aria-label={label}
+                title={label}
+                className={`press relative flex h-9 items-center gap-2 rounded-full px-2.5 text-[13px] font-medium sm:px-3 ${
+                  active ? "bg-white/[0.09] text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" : "text-muted hover:bg-white/[0.05] hover:text-ink"
                 }`}
               >
-                <Icon size={22} weight={active ? "fill" : "regular"} aria-hidden />
-                {label}
-                {id === "context" && badge ? (
-                  <span className="mono absolute right-1.5 top-1 rounded-full bg-accent px-1.5 text-[10px] font-semibold leading-4 text-accent-ink">{badge}</span>
+                <Icon size={17} weight={active ? "regular" : "light"} aria-hidden />
+                <span className="hidden lg:inline">{label}</span>
+                {count ? (
+                  <span
+                    className={`mono hidden rounded-full px-1.5 text-[10.5px] leading-4 sm:inline ${
+                      id === "live" && listening ? "bg-conflict-soft text-conflict" : "bg-white/[0.08] text-muted"
+                    }`}
+                  >
+                    {count}
+                  </span>
                 ) : null}
               </button>
             );
           })}
         </nav>
-        <div className="hidden flex-col items-center gap-1.5 md:flex" role="status">
-          <span className={`h-2.5 w-2.5 rounded-full ${listening ? "live-dot bg-commit" : "bg-[var(--rail-muted)]"}`} aria-hidden />
-          <span className="text-[11px] text-[var(--rail-muted)]">{listening ? "Listening" : "Idle"}</span>
-        </div>
-      </aside>
+      </header>
 
-      <main className="order-1 flex min-h-0 min-w-0 flex-1 flex-col md:order-2">
-        {error ? (
-          <p className="border-b border-conflict/30 bg-conflict-soft px-5 py-2.5 text-sm font-medium text-conflict md:px-8" role="alert">
-            Cannot reach Escort ({error}). Retrying.
-          </p>
-        ) : null}
+      <main className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col">
         {screen === "live" ? (
           <Live
             status={status}
             refresh={refresh}
+            setListening={setListening}
             transcriptOpen={transcriptOpen}
             onToggleTranscript={() => setTranscriptOpen((v) => !v)}
-            onGoContext={() => go("context")}
           />
+        ) : screen === "chat" ? (
+          <Chat status={status} refresh={refresh} go={go} />
         ) : (
-          <div className="scroll-thin min-h-0 flex-1 overflow-auto px-5 py-7 md:px-10">
-            {screen === "setup" ? <Setup status={status} refresh={refresh} /> : null}
-            {screen === "context" ? <ContextScreen status={status} refresh={refresh} /> : null}
-            {screen === "recap" ? <Recap meeting={status?.meeting?.meeting || {}} /> : null}
-            {screen === "settings" ? <Settings status={status} refresh={refresh} /> : null}
+          <div className="scroll-thin min-h-0 flex-1 overflow-auto px-4 pb-16 pt-10 md:px-10 md:pt-14">
+            {screen === "home" ? <Home status={status} refresh={refresh} go={go} setListening={setListening} /> : null}
+            {screen === "context" ? <ContextScreen status={status} refresh={refresh} go={go} /> : null}
+            {screen === "recap" ? <Recap meeting={status?.meeting?.meeting || {}} title={status?.meeting?.title} /> : null}
+            {screen === "settings" ? <Settings status={status} refresh={refresh} section={route.sub} go={go} /> : null}
           </div>
         )}
       </main>
+
+      {error ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex justify-center px-4" role="alert">
+          <p className="glass fade-in flex items-center gap-2.5 rounded-full px-4 py-2 text-[13px] text-muted">
+            <span className="h-1.5 w-1.5 rounded-full bg-conflict" aria-hidden />
+            Can't reach Escort's local service ({error}). Retrying every few seconds.
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

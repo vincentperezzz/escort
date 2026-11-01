@@ -38,13 +38,13 @@ export default function ConnectAccounts({ onChange, compact = false }) {
 
   return (
     <section aria-labelledby="connect-heading">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h3 id="connect-heading" className="text-base font-semibold">
+          <h3 id="connect-heading" className="text-[17px] font-medium tracking-[-0.015em]">
             Connect accounts
           </h3>
           {compact ? null : (
-            <p className="mt-0.5 text-sm text-muted">Optional. Without them, Escort runs on clearly labelled demo data.</p>
+            <p className="mt-1 text-sm text-muted">Optional. Without them, Escort runs on clearly labelled demo data.</p>
           )}
         </div>
         {c.unavailable ? <Pill tone="warn">Backend not reachable</Pill> : null}
@@ -52,7 +52,7 @@ export default function ConnectAccounts({ onChange, compact = false }) {
       {c.providers === null ? (
         <div className="grid gap-3 md:grid-cols-2" aria-busy="true">
           {[0, 1].map((i) => (
-            <div key={i} className="h-44 rounded-xl border border-line bg-surface" />
+            <div key={i} className="h-44 rounded-[22px] bg-white/[0.025] hairline" />
           ))}
         </div>
       ) : (
@@ -82,13 +82,13 @@ function ProviderCard({ provider, ctl }) {
   }
 
   return (
-    <article className="rounded-xl border border-line bg-surface p-4">
+    <article className="rounded-[22px] bg-white/[0.025] p-5 hairline">
       <header className="flex items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-line bg-raised">
-          <Icon size={22} weight="regular" aria-hidden />
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/[0.05] hairline">
+          <Icon size={20} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
-          <h4 className="text-sm font-semibold">{meta.name}</h4>
+          <h4 className="text-[15px] font-medium">{meta.name}</h4>
           <p className="text-xs text-muted">{meta.scope}</p>
         </div>
         {provider.connected ? (
@@ -101,7 +101,7 @@ function ProviderCard({ provider, ctl }) {
       {provider.connected ? (
         <div className="mt-4">
           <p className="flex items-center gap-2 text-sm">
-            <CheckCircle size={18} weight="fill" className={demo ? "text-warn" : "text-commit"} aria-hidden />
+            <CheckCircle size={18} weight="regular" className={demo ? "text-warn" : "text-commit"} aria-hidden />
             <span className="min-w-0 truncate font-medium">{provider.account || "Account connected"}</span>
           </p>
           {demo ? (
@@ -126,16 +126,16 @@ function ProviderCard({ provider, ctl }) {
           <ol className="mt-4 space-y-2.5">
             {meta.steps.map((text, i) => (
               <li key={text} className="flex gap-3 text-sm leading-snug">
-                <span className="mono grid h-5 w-5 shrink-0 place-items-center rounded-full bg-sunken text-[11px] font-semibold text-muted">
+                <span className="mono grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/[0.06] text-[11px] text-muted">
                   {i + 1}
                 </span>
-                <span>{text}</span>
+                <span className="text-ink/85">{text}</span>
               </li>
             ))}
           </ol>
 
           {!provider.configured && provider.setup_hint ? (
-            <p className="mt-3 rounded-lg bg-warn-soft px-3 py-2 text-xs leading-relaxed text-warn">{provider.setup_hint}</p>
+            <p className="mt-3 rounded-2xl bg-warn-soft px-3.5 py-2.5 text-xs leading-relaxed text-warn">{provider.setup_hint}</p>
           ) : null}
 
           {provider.id === "notion" ? (
@@ -148,7 +148,7 @@ function ProviderCard({ provider, ctl }) {
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   placeholder="ntn_… or secret_…"
-                  className="mt-1 h-10 w-full rounded-lg border border-line-strong bg-raised px-3 text-sm placeholder:text-faint"
+                  className="field mt-1.5 h-11 w-full px-4 text-sm"
                 />
               </label>
               <Button type="submit" variant="primary" disabled={!token.trim() || busy === "connecting"}>
@@ -165,11 +165,11 @@ function ProviderCard({ provider, ctl }) {
               {busy === "waiting" ? (
                 <div className="flex items-center gap-3 text-xs">
                   {authUrl ? (
-                    <a className="inline-flex items-center gap-1 font-semibold text-accent underline-offset-2 hover:underline" href={authUrl} target="_blank" rel="noreferrer">
+                    <a className="inline-flex items-center gap-1 font-medium text-[#c6bfff] underline-offset-4 hover:underline" href={authUrl} target="_blank" rel="noreferrer">
                       Open sign-in again <ArrowSquareOut size={14} aria-hidden />
                     </a>
                   ) : null}
-                  <button type="button" className="font-semibold text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
+                  <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
                     Cancel
                   </button>
                 </div>
