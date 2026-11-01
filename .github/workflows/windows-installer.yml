@@ -38,11 +38,14 @@ jobs:
           $exe = Join-Path $PWD 'dist\Escort\Escort.exe'
           if (-not (Test-Path $exe)) { throw "Missing $exe" }
           $p = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 8
-          if ($p.HasExited) {
-            throw "Escort.exe exited early with code $($p.ExitCode)"
+          $ok = $false
+          for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) { throw "Escort.exe exited early with code $($p.ExitCode)" }
+            try { $ok = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8750/api/status -TimeoutSec 2).StatusCode -eq 200 } catch {}
           }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "Escort.exe never served /api/status (startup crash dialog?)" }
       - name: Upload CI artifact
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4

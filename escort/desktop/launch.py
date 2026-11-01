@@ -31,7 +31,7 @@ def start_mcp(store: MeetingStore) -> None:
     state = AppState(store)
     state.pipeline = None
     app = create_server(state).streamable_http_app()
-    config = uvicorn.Config(app, host="127.0.0.1", port=8747, log_level="warning")
+    config = uvicorn.Config(app, host="127.0.0.1", port=8747, log_level="warning", log_config=None)
     server = uvicorn.Server(config)
     threading.Thread(target=server.run, name="escort-mcp", daemon=True).start()
 
@@ -41,7 +41,7 @@ def start_whatsapp() -> None:
     from escort.whatsapp.server import build_from_env
 
     app = create_app(build_from_env(), poll=True)
-    config = uvicorn.Config(app, host="127.0.0.1", port=8748, log_level="warning")
+    config = uvicorn.Config(app, host="127.0.0.1", port=8748, log_level="warning", log_config=None)
     threading.Thread(target=uvicorn.Server(config).run, name="escort-whatsapp", daemon=True).start()
 
 
@@ -67,9 +67,9 @@ def main(argv: list[str] | None = None) -> None:
     app = create_desktop_app(runtime, ui_dist())
     url = f"http://{args.host}:{args.port}"
     if args.web:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning", log_config=None)
         return
-    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning", log_config=None)
     server = uvicorn.Server(config)
     threading.Thread(target=server.run, name="escort-ui", daemon=True).start()
     _open_window(url, runtime)
