@@ -1,98 +1,265 @@
+"""Live capture: screen frames + Me/Them audio feeding a Pipeline until `stop` is set.
+
+The screen loop samples the primary monitor about once a second. Every grab goes
+through Pipeline.ingest_image, whose FrameGate keeps a frame only when it differs
+from the last *kept* frame (dHash distance >= 6 bits or mean grey drift >= 8/255);
+unchanged grabs are only counted. The store keeps just the newest kept frame.
+
+Every loop fails soft: a missing dependency, device or key is reported through
+`LiveStats.fail` / store warnings and never raises out of the thread.
+"""
+
 from __future__ import annotations
 
 import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 from escort.audio_util import rms_s16, write_wav
-from escort.capture.screen import ScreenGrabber
-from escort.capture.windows_audio import WindowsAudioCapture
 from escort.pipeline import Pipeline
 from escort.prd import keywords_from_prd
 from escort.settings import Settings
-from escort.transcribe.muse import MuseRealtimeSession
+from escort.store import utc_now
+
+SCREEN_INTERVAL_S = 1.0
+IDLE_WAIT_S = 0.01
 
 
-def start_live(pipeline: Pipeline, settings: Settings, stop: threading.Event) -> None:
+class LiveStats:
+    """Thread-safe counters the desktop status endpoint exposes."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.monitoring = False
+        self.last_frame_at: str | None = None
+        self.frames_seen = 0
+        self.changed_frames = 0
+        self.audio_running = False
+        self.errors: list[str] = []
+
+    def frame(self, changed: bool) -> None:
+        with self._lock:
+            self.frames_seen += 1
+            self.last_frame_at = utc_now()
+            if changed:
+                self.changed_frames += 1
+
+    def fail(self, message: str) -> None:
+        with self._lock:
+            if message not in self.errors:
+                self.errors.append(message)
+
+    def screen(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "monitoring": self.monitoring,
+                "last_frame_at": self.last_frame_at,
+                "frames_seen": self.frames_seen,
+                "changed_frames": self.changed_frames,
+            }
+
+    def error(self) -> str | None:
+        with self._lock:
+            return "; ".join(self.errors) or None
+
+
+def _default_grabber():
+    from escort.capture.screen import ScreenGrabber
+
+    return ScreenGrabber()
+
+
+def _default_audio():
+    from escort.capture.windows_audio import WindowsAudioCapture
+
+    return WindowsAudioCapture()
+
+
+def start_live(
+    pipeline: Pipeline,
+    settings: Settings,
+    stop: threading.Event,
+    *,
+    stats: LiveStats | None = None,
+    mic_index: int | None = None,
+    loopback_index: int | None = None,
+    grabber_factory: Callable[[], Any] | None = None,
+    audio_factory: Callable[[], Any] | None = None,
+    session_factory: Callable[..., Any] | None = None,
+) -> list[threading.Thread]:
+    stats = stats or LiveStats()
     pipeline.store.mode = "live"
     pipeline.start_interval(settings.spark_interval_s, stop)
-    threading.Thread(target=_screen_loop, args=(pipeline, stop), name="screen", daemon=True).start()
-    threading.Thread(target=_audio_loop, args=(pipeline, settings, stop), name="audio", daemon=True).start()
+    threads = [
+        threading.Thread(
+            target=_screen_loop,
+            args=(pipeline, stop, stats, grabber_factory or _default_grabber),
+            name="screen",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_audio_loop,
+            args=(pipeline, settings, stop, stats),
+            kwargs={
+                "mic_index": mic_index,
+                "loopback_index": loopback_index,
+                "audio_factory": audio_factory or _default_audio,
+                "session_factory": session_factory,
+            },
+            name="audio",
+            daemon=True,
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    return threads
 
 
-def _screen_loop(pipeline: Pipeline, stop: threading.Event) -> None:
-    grabber = ScreenGrabber()
+def _screen_loop(
+    pipeline: Pipeline,
+    stop: threading.Event,
+    stats: LiveStats | None = None,
+    grabber_factory: Callable[[], Any] | None = None,
+) -> None:
+    stats = stats or LiveStats()
+    try:
+        grabber = (grabber_factory or _default_grabber)()
+    except Exception as exc:
+        message = f"Screen capture unavailable: {exc}"
+        stats.fail(message)
+        pipeline.store.warn(message)
+        return
+    stats.monitoring = True
     try:
         while not stop.is_set():
             started = time.perf_counter()
             try:
-                pipeline.ingest_image(grabber.grab())
+                changed = pipeline.ingest_image(grabber.grab())
             except Exception as exc:
-                pipeline.store.warn(f"screen grab failed: {exc}")
+                message = f"Screen grab failed: {exc}"
+                stats.fail(message)
+                pipeline.store.warn(message)
                 break
-            remaining = 1.0 - (time.perf_counter() - started)
+            stats.frame(bool(changed))
+            remaining = SCREEN_INTERVAL_S - (time.perf_counter() - started)
             if remaining > 0:
                 stop.wait(remaining)
     finally:
-        grabber.close()
+        stats.monitoring = False
+        try:
+            grabber.close()
+        except Exception:
+            pass
 
 
-def _audio_loop(pipeline: Pipeline, settings: Settings, stop: threading.Event) -> None:
+def _audio_loop(
+    pipeline: Pipeline,
+    settings: Settings,
+    stop: threading.Event,
+    stats: LiveStats | None = None,
+    *,
+    mic_index: int | None = None,
+    loopback_index: int | None = None,
+    audio_factory: Callable[[], Any] | None = None,
+    session_factory: Callable[..., Any] | None = None,
+) -> None:
+    stats = stats or LiveStats()
+
+    def fail(message: str) -> None:
+        stats.fail(message)
+        pipeline.store.warn(message)
+
     if pipeline.transcriber.name == "scripted-fixture" and not settings.api_key:
-        pipeline.store.warn(
-            "Live mic capture needs MODEL_API_KEY for Muse Voice Transcribe, "
-            "or pip install 'escort[whisper]' for the open-weights fallback. "
-            "Use replay for the staged demo."
+        fail(
+            "Live transcription needs the Meta API key (Setup) for Muse Voice Transcribe, "
+            "or pip install 'escort[whisper]' for the open-weights fallback. Screen monitoring still runs."
         )
         return
-    capture = WindowsAudioCapture()
     try:
-        capture.open()
+        capture = (audio_factory or _default_audio)()
+        capture.open(mic_index=mic_index, loopback_index=loopback_index)
     except Exception as exc:
-        pipeline.store.warn(str(exc))
+        fail(f"Audio capture unavailable: {exc}")
         return
+    stats.audio_running = True
     try:
         if settings.api_key:
-            _stream_muse(capture, pipeline, settings, stop)
+            _stream_muse(capture, pipeline, settings, stop, session_factory)
         else:
             _stream_vad(capture, pipeline, stop)
+    except Exception as exc:
+        fail(f"Live transcription stopped: {exc}")
     finally:
-        capture.close()
+        stats.audio_running = False
+        try:
+            capture.close()
+        except Exception:
+            pass
 
 
-def _stream_muse(capture: WindowsAudioCapture, pipeline: Pipeline, settings: Settings, stop: threading.Event) -> None:
-    sessions: dict[str, MuseRealtimeSession] = {}
-    keywords = keywords_from_prd(pipeline.prd_text)
-    for speaker in capture.speakers():
-        session = MuseRealtimeSession(
-            settings,
-            speaker,
-            on_final=pipeline.finish_turn,
-            on_partial=pipeline.note_partial,
-            keywords=keywords,
-        )
-        session.start()
-        sessions[speaker] = session
-    pipeline.store.transcriber = settings.asr_model
+def _read(capture: Any, speaker: str) -> bytes:
+    """Non-blocking read when the capture supports it (WASAPI loopback stalls in silence)."""
     try:
+        return capture.read(speaker, block=False)
+    except TypeError:
+        return capture.read(speaker)
+
+
+def _stream_muse(
+    capture: Any,
+    pipeline: Pipeline,
+    settings: Settings,
+    stop: threading.Event,
+    session_factory: Callable[..., Any] | None = None,
+) -> None:
+    if session_factory is None:
+        from escort.transcribe.muse import MuseRealtimeSession
+
+        session_factory = MuseRealtimeSession
+    sessions: dict[str, Any] = {}
+    keywords = keywords_from_prd(pipeline.prd_text)
+    try:
+        for speaker in capture.speakers():
+            session = session_factory(
+                settings,
+                speaker,
+                on_final=pipeline.finish_turn,
+                on_partial=pipeline.note_partial,
+                keywords=keywords,
+            )
+            session.start()
+            sessions[speaker] = session
+        pipeline.store.transcriber = settings.asr_model
         while not stop.is_set():
+            got = False
             for speaker in capture.speakers():
-                sessions[speaker].write(capture.read(speaker))
+                pcm = _read(capture, speaker)
+                if pcm:
+                    got = True
+                    sessions[speaker].write(pcm)
+            if not got:
+                stop.wait(IDLE_WAIT_S)
     finally:
         for session in sessions.values():
-            session.close()
+            try:
+                session.close()
+            except Exception:
+                pass
 
 
-def _stream_vad(capture: WindowsAudioCapture, pipeline: Pipeline, stop: threading.Event) -> None:
+def _stream_vad(capture: Any, pipeline: Pipeline, stop: threading.Event) -> None:
     buffers = {speaker: bytearray() for speaker in capture.speakers()}
     speaking = {speaker: False for speaker in capture.speakers()}
     silence_ms = {speaker: 0.0 for speaker in capture.speakers()}
     while not stop.is_set():
+        got = False
         for speaker in capture.speakers():
-            pcm = capture.read(speaker)
+            pcm = _read(capture, speaker)
             if not pcm:
                 continue
+            got = True
             level = rms_s16(pcm)
             duration = (len(pcm) / 2) / 24000 * 1000
             if level >= 800:
@@ -117,3 +284,5 @@ def _stream_vad(capture: WindowsAudioCapture, pipeline: Pipeline, stop: threadin
                 path = Path(folder) / f"{speaker}.wav"
                 write_wav(path, blob)
                 pipeline.ingest_wav(path, speaker=speaker)
+        if not got:
+            stop.wait(IDLE_WAIT_S)

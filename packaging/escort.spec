@@ -30,6 +30,10 @@ hiddenimports = collect_submodules("escort") + [
     "pystray",
     "PIL",
     "secrets",
+    # Live capture imports these lazily so the app still starts without them.
+    "mss",
+    "pyaudiowpatch",
+    "websockets",
 ]
 
 a = Analysis(

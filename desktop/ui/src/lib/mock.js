@@ -2,10 +2,40 @@
 const inMinutes = (m) => new Date(Date.now() + m * 60000).toISOString();
 const params = new URLSearchParams(window.location.search);
 
+function SUMMARY(kind) {
+  const ready = {
+    status: "ready",
+    title: "BayaniPay scope review: Phase 2 hinges on KYC go-live",
+    bullets: [
+      "Maria wants the payment rails live by end of month; your plan ties Phase 2 to KYC sign-off next week.",
+      "She floated dropping the transaction fee to 1%. The SOW fixes 1.5% until Q3, so it was parked for the commercial review.",
+      "Agreed to restate scope in writing before any dates are committed.",
+    ],
+    commitments: [
+      { who: "You", what: "Send the revised Phase 2 timeline", due: "Friday" },
+      { who: "Maria", what: "Confirm KYC vendor sign-off date", due: "Next Tuesday" },
+    ],
+    conflicts: [{ title: "Fee change is out of scope", section: "SOW: Fees" }],
+    generated_at: new Date().toISOString(),
+  };
+  if (kind === "ready") return ready;
+  if (kind === "generating") return { status: "generating", bullets: [], commitments: [], conflicts: [] };
+  if (kind === "error") return { status: "error", bullets: [], commitments: [], conflicts: [] };
+  return { status: "idle", bullets: [], commitments: [], conflicts: [] };
+}
+
 const state = {
   listening: params.get("mock") === "live",
   listening_started_at: new Date(Date.now() - 754000).toISOString(),
-  overlay: { hide_from_share: true, visible: true, supported: params.get("mock") !== "unsupported" },
+  overlay: {
+    hide_from_share: true,
+    visible: true,
+    supported: params.get("mock") !== "unsupported",
+    collapsed: params.get("collapsed") === "1",
+    opacity: Number(params.get("opacity")) || 0.92,
+    input_focus: false,
+  },
+  summary: SUMMARY(params.get("summary") || "idle"),
   meeting: {
     title: "BayaniPay scope review",
     mode: "live",
@@ -40,7 +70,7 @@ const state = {
     ],
     connectors: [{ id: "notion", mode: "mock" }],
     upcoming: [
-      { id: "evt_bayani_scope", title: "BayaniPay scope review", start: inMinutes(24) },
+      { id: "evt_bayani_scope", title: "BayaniPay scope review", start: inMinutes(24), attendees: ["Maria", "Jun", "Lea"] },
       { id: "evt_kyc", title: "KYC vendor sync with Lumen", start: inMinutes(190) },
       { id: "evt_weekly", title: "Weekly delivery check-in", start: inMinutes(1460) },
     ],
@@ -62,6 +92,14 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 function status() {
   return {
     listening: state.listening,
+    summary: state.summary,
+    screen: {
+      monitoring: state.listening || params.get("mock") === "live",
+      last_frame_at: new Date(Date.now() - 3000).toISOString(),
+      frames_seen: 142,
+      changed_frames: 11,
+    },
+    capture_error: params.get("capture") === "error" ? "Screen capture is blocked by another app. Escort will keep retrying." : null,
     listening_started_at: state.listening ? state.listening_started_at : null,
     has_meta_key: true,
     has_whatsapp_token: false,
@@ -92,8 +130,18 @@ export async function handle(path, options = {}) {
     if (method === "POST") Object.assign(state.overlay, body);
     return { ...state.overlay, listening: state.listening };
   }
+  if (path === "/api/summary/regenerate") {
+    state.summary = SUMMARY("generating");
+    setTimeout(() => { state.summary = SUMMARY("ready"); }, 2500);
+    return status();
+  }
   if (path === "/api/listen") {
+    const was = state.listening;
     state.listening = Boolean(body.on);
+    if (was && !state.listening) {
+      state.summary = SUMMARY("generating");
+      setTimeout(() => { state.summary = SUMMARY("ready"); }, 3500);
+    }
     if (state.listening) state.listening_started_at = new Date().toISOString();
     return status();
   }

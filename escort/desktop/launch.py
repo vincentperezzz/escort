@@ -8,6 +8,7 @@ from pathlib import Path
 
 import uvicorn
 
+from escort.desktop import win_overlay
 from escort.desktop.api import create_desktop_app
 from escort.desktop.hotkey import GlobalHotkey
 from escort.desktop.overlay import create_overlay
@@ -80,6 +81,29 @@ def main(argv: list[str] | None = None) -> None:
     _open_window(url, runtime)
 
 
+class MainWindow:
+    """Show/hide the main pywebview window; show also restores and raises it."""
+
+    def __init__(self, window) -> None:
+        self.window = window
+
+    def hide(self) -> None:
+        self.window.hide()
+
+    def show(self) -> None:
+        self.window.show()
+        try:
+            self.window.restore()
+        except Exception:
+            pass
+        native = getattr(self.window, "native", None)
+        if native is not None:
+            try:
+                win_overlay.focus_window(int(native.Handle.ToInt64()))
+            except Exception as exc:
+                log.debug("Could not raise the main window: %s", exc)
+
+
 def _open_window(url: str, runtime: DesktopRuntime) -> None:
     try:
         import webview
@@ -90,6 +114,7 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
     window = webview.create_window("Escort", url, width=1120, height=780, background_color="#efe6d6")
     overlay = create_overlay(webview, url)
     runtime.attach_overlay(overlay)
+    runtime.attach_main_window(MainWindow(window))
     if overlay is not None:
         # pywebview only exits once every window is gone; the overlay must not keep it alive.
         window.events.closed += overlay.destroy
@@ -98,6 +123,7 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
     try:
         webview.start()
     finally:
+        runtime.shutdown()
         if hotkey is not None:
             hotkey.stop()
         if icon is not None:
@@ -130,7 +156,10 @@ def _tray(runtime: DesktopRuntime, window):
             runtime.set_listening(not runtime.listening)
 
         def show(_icon, _item) -> None:
-            window.show()
+            if runtime.main_window is not None:
+                runtime.show_main_window()
+            else:
+                window.show()
 
         def toggle_overlay(_icon, _item) -> None:
             runtime.toggle_overlay()

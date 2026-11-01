@@ -3,6 +3,7 @@ import { Eye, EyeSlash, Play, Stop } from "@phosphor-icons/react";
 import { Bezel, Button, Chip, Dot, Empty, WaveBars } from "../components/ui.jsx";
 import { post, mmss } from "../lib/api.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
+import ScreenLine from "../components/ScreenLine.jsx";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
 
 export default function Live({ status, refresh, setListening, transcriptOpen, onToggleTranscript }) {
@@ -46,6 +47,7 @@ export default function Live({ status, refresh, setListening, transcriptOpen, on
                   "Paused"
                 )}
               </p>
+              <ScreenLine status={status} className="mt-1" />
             </div>
           </div>
           {latency?.count ? (
@@ -178,7 +180,7 @@ function Transcript({ turns, onHide }) {
   );
 }
 
-function Bubble({ turn }) {
+export function Bubble({ turn }) {
   const me = turn.speaker === "Me";
   return (
     <li className={`flex ${me ? "justify-end" : "justify-start"}`}>

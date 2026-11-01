@@ -53,8 +53,9 @@ def test_overlay_api_round_trip_with_fake_controller(tmp_path: Path):
     runtime.attach_overlay(fake)
     client = TestClient(create_desktop_app(runtime))
 
+    extra = {"collapsed": False, "opacity": 0.92, "input_focus": False}
     got = client.get("/api/overlay").json()
-    assert got == {"hide_from_share": True, "visible": False, "listening": False, "supported": True}
+    assert got == {"hide_from_share": True, "visible": False, "listening": False, "supported": True, **extra}
     assert fake.calls == [("hide", True), ("visible", False)]
 
     shown = client.post("/api/overlay", json={"visible": True}).json()
@@ -62,7 +63,7 @@ def test_overlay_api_round_trip_with_fake_controller(tmp_path: Path):
     assert fake.calls[-1] == ("visible", True)
 
     off = client.post("/api/overlay", json={"hide_from_share": False}).json()
-    assert off == {"hide_from_share": False, "visible": True, "listening": False, "supported": True}
+    assert off == {"hide_from_share": False, "visible": True, "listening": False, "supported": True, **extra}
     assert fake.calls[-1] == ("hide", False)
 
     status = client.get("/api/status").json()

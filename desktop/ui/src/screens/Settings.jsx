@@ -3,6 +3,7 @@ import { SlidersHorizontal, Plugs, Keyboard, Microphone, ShieldCheck } from "@ph
 import { Bezel, Button, Field, Kbd, Pill, Select, Toggle } from "../components/ui.jsx";
 import ConnectAccounts from "../components/ConnectAccounts.jsx";
 import { post } from "../lib/api.js";
+import OpacitySlider from "../components/OpacitySlider.jsx";
 import { useOverlay } from "../lib/useOverlay.js";
 
 const SECTIONS = [
@@ -165,6 +166,18 @@ function General({ status, refresh }) {
             checked={Boolean(overlay.hide_from_share)}
             disabled={unavailable || overlay.supported === false}
             onChange={(v) => overlay.update({ hide_from_share: v })}
+          />
+        </Row>
+        <Row
+          title="Overlay transparency"
+          body="Make the in-meeting overlay more see-through. Text stays readable down to 30%."
+          note={unavailable ? <p className="text-[12.5px] text-faint">Not available in this build yet.</p> : null}
+        >
+          <OpacitySlider
+            className="w-56"
+            value={Number.isFinite(overlay.opacity) ? overlay.opacity : 0.92}
+            disabled={unavailable}
+            onChange={(v) => overlay.update({ opacity: v })}
           />
         </Row>
         <Row title="Open at login" body="Start Escort quietly in the tray when you sign in to Windows." note={<Pill>Coming soon</Pill>}>

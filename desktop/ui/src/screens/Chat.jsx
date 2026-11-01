@@ -12,11 +12,17 @@ const SUGGESTIONS = [
 
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-export default function Chat({ status, refresh, go }) {
+export default function Chat({ status, refresh, go, seed = "" }) {
   const ctx = status?.context || {};
   const serverChat = ctx.chat || [];
   const [local, setLocal] = useState(null);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => {
+    try {
+      return seed ? decodeURIComponent(seed) : "";
+    } catch {
+      return "";
+    }
+  });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [fresh, setFresh] = useState(-1);

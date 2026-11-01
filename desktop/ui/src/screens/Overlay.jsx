@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
-import { CaretDown, CaretUp, Play, Stop, ArrowUp, X, Lightning, ChatCircleText, ListChecks, ArrowsClockwise } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CaretDown, CaretUp, Play, Stop, ArrowUp, X, Lightning, ChatCircleText, ListChecks, ArrowsClockwise, Drop } from "@phosphor-icons/react";
 import Logo from "../components/Logo.jsx";
-import { api, post, mmss } from "../lib/api.js";
+import { api, post, mmss, MOCK } from "../lib/api.js";
+import ScreenLine from "../components/ScreenLine.jsx";
+import OpacitySlider from "../components/OpacitySlider.jsx";
+import { useOverlay } from "../lib/useOverlay.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
 
 const QUICK = [
   { id: "assist", label: "Assist", Icon: Lightning, prompt: "Assist me right now: from my notes and this call so far, what matters most in the next minute?" },
-  { id: "say", label: "What should I say?", Icon: ChatCircleText, prompt: "What should I say next? Give me one or two lines I can use as-is." },
-  { id: "followups", label: "Follow-ups", Icon: ArrowsClockwise, prompt: "What follow-ups should I send after this call?" },
+  { id: "say", label: "What to say", title: "What should I say?", Icon: ChatCircleText, prompt: "What should I say next? Give me one or two lines I can use as-is." },
+  { id: "followups", label: "Follow-ups", title: "Draft follow-ups", Icon: ArrowsClockwise, prompt: "What follow-ups should I send after this call?" },
   { id: "recap", label: "Recap", Icon: ListChecks, prompt: "Give me a quick recap of the call so far: open items and who promised what." },
 ];
 
@@ -19,7 +22,12 @@ const QUICK = [
 export default function Overlay() {
   const [status, setStatus] = useState(null);
   const [offline, setOffline] = useState(false);
-  const [open, setOpen] = useState(true);
+  const ov = useOverlay({ pollMs: 2000 });
+  const collapsed = Boolean(ov.collapsed);
+  const open = !collapsed;
+  const opacity = Number.isFinite(ov.opacity) ? ov.opacity : 0.92;
+  const [tuning, setTuning] = useState(false);
+  const focused = useRef(false);
   const [answer, setAnswer] = useState(null); // { label, text } | { label, pending: true } | { label, error }
   const [input, setInput] = useState("");
   const [acting, setActing] = useState("");
@@ -45,6 +53,17 @@ export default function Overlay() {
   const cards = (meeting.cards || []).slice().reverse();
   const conflict = cards.find((c) => kindOf(c.type) === "conflict");
   const rest = cards.filter((c) => c !== conflict).slice(0, conflict ? 2 : 3);
+
+  const setFocus = useCallback((on) => {
+    focused.current = on;
+    post("/api/overlay", { input_focus: on }).catch(() => {});
+  }, []);
+  useEffect(() => () => { if (focused.current) post("/api/overlay", { input_focus: false }).catch(() => {}); }, []);
+
+  function toggleCollapsed() {
+    setTuning(false);
+    ov.update({ collapsed: !collapsed });
+  }
 
   async function toggleListen() {
     try {
@@ -77,7 +96,10 @@ export default function Overlay() {
   }
 
   return (
-    <div className="flex h-full w-full flex-col items-center gap-2 p-2 text-ink">
+    <div
+      className="flex h-full w-full flex-col items-center gap-2 bg-transparent p-2 text-ink"
+      style={MOCK && ov.opacity != null ? { opacity } : undefined}
+    >
       <div className="pywebview-drag-region glass-solid flex w-full max-w-[440px] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-1.5">
         <Logo state={listening ? "live" : "idle"} size={30} />
         <div className="pywebview-drag-region flex min-w-0 flex-1 items-center gap-2 pl-1">
@@ -90,9 +112,21 @@ export default function Overlay() {
           )}
           {cards.length ? <span className="mono rounded-full bg-white/[0.07] px-1.5 text-[10.5px] leading-4 text-muted">{cards.length}</span> : null}
         </div>
+        {open ? (
+          <button
+            type="button"
+            onClick={() => setTuning((v) => !v)}
+            aria-expanded={tuning}
+            aria-label="Overlay transparency"
+            title="Overlay transparency"
+            className={`press grid h-8 w-8 shrink-0 place-items-center rounded-full hover:bg-white/[0.1] ${tuning ? "bg-white/[0.12] text-ink" : "bg-white/[0.06] text-muted"}`}
+          >
+            <Drop size={15} aria-hidden />
+          </button>
+        ) : null}
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={toggleCollapsed}
           aria-expanded={open}
           className="press flex h-8 items-center gap-1 rounded-full bg-white/[0.06] pl-3 pr-2.5 text-[12.5px] font-medium text-ink/90 hover:bg-white/[0.1]"
         >
@@ -113,6 +147,13 @@ export default function Overlay() {
         </button>
       </div>
 
+      {open && tuning ? (
+        <div className="rise glass-solid flex w-full max-w-[440px] items-center gap-3 rounded-full py-2 pl-4 pr-3">
+          <Drop size={14} className="shrink-0 text-faint" aria-hidden />
+          <OpacitySlider value={opacity} onChange={(v) => ov.update({ opacity: v })} className="flex-1" />
+        </div>
+      ) : null}
+
       {open ? (
         <section className="rise glass-solid flex min-h-0 w-full max-w-[440px] flex-1 flex-col overflow-hidden rounded-[24px]" aria-label="Escort live panel">
           <header className="pywebview-drag-region flex items-center justify-between gap-3 px-4 pb-2 pt-3.5">
@@ -130,6 +171,7 @@ export default function Overlay() {
             {rest.map((card) => (
               <MiniCard key={card.id} card={card} />
             ))}
+            <ScreenLine status={status} className="px-2 pt-1" />
             {!cards.length ? (
               <p className="px-2 py-5 text-center text-[13px] leading-relaxed text-muted">
                 {offline
@@ -142,16 +184,17 @@ export default function Overlay() {
           </div>
 
           <div className="space-y-2 bg-black/20 px-2.5 pb-2.5 pt-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-            <div className="flex flex-wrap gap-1">
-              {QUICK.map(({ id, label, Icon, prompt }) => (
+            <div className="flex flex-nowrap justify-between gap-1">
+              {QUICK.map(({ id, label, title, Icon, prompt }) => (
                 <button
                   key={id}
                   type="button"
+                  title={title || label}
                   onClick={() => ask(label, prompt)}
                   disabled={answer?.pending}
-                  className="press inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 text-[12px] font-medium text-ink/90 hover:bg-white/[0.1] disabled:opacity-50"
+                  className="press inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-full bg-white/[0.06] px-2 text-[11.5px] font-medium tracking-tight text-ink/90 hover:bg-white/[0.1] disabled:opacity-50"
                 >
-                  <Icon size={13} aria-hidden />
+                  <Icon size={12} aria-hidden />
                   {label}
                 </button>
               ))}
@@ -167,6 +210,14 @@ export default function Overlay() {
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onFocus={() => setFocus(true)}
+                onBlur={() => setFocus(false)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    if (!answer?.pending) ask(QUICK[0].label, QUICK[0].prompt);
+                  }
+                }}
                 placeholder="Ask Muse…"
                 aria-label="Ask Muse"
                 className="h-8 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint focus-visible:outline-none"

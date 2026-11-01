@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconContext, House, Sparkle, Waveform, FileText, ListChecks, GearSix } from "@phosphor-icons/react";
 import { api, post } from "./lib/api.js";
 import Logo, { logoSvg } from "./components/Logo.jsx";
@@ -109,6 +109,14 @@ function Shell({ route }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Stopping (from here or from the overlay) lands on Recap, where the summary appears.
+  const wasListening = useRef(null);
+  useEffect(() => {
+    if (!status) return;
+    if (wasListening.current === true && !listening) window.location.hash = "/recap";
+    wasListening.current = listening;
+  }, [listening, status]);
+
   useFaviconState(listening);
 
   const ctx = status?.context || {};
@@ -173,12 +181,12 @@ function Shell({ route }) {
             onToggleTranscript={() => setTranscriptOpen((v) => !v)}
           />
         ) : screen === "chat" ? (
-          <Chat status={status} refresh={refresh} go={go} />
+          <Chat key={route.sub} status={status} refresh={refresh} go={go} seed={route.sub} />
         ) : (
           <div className="scroll-thin min-h-0 flex-1 overflow-auto px-4 pb-16 pt-10 md:px-10 md:pt-14">
             {screen === "home" ? <Home status={status} refresh={refresh} go={go} setListening={setListening} /> : null}
             {screen === "context" ? <ContextScreen status={status} refresh={refresh} go={go} /> : null}
-            {screen === "recap" ? <Recap meeting={status?.meeting?.meeting || {}} title={status?.meeting?.title} /> : null}
+            {screen === "recap" ? <Recap status={status} refresh={refresh} tab={route.sub} go={go} /> : null}
             {screen === "settings" ? <Settings status={status} refresh={refresh} section={route.sub} go={go} /> : null}
           </div>
         )}

@@ -1,25 +1,39 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Protocol
+
+import httpx
 
 from escort.context.library import ContextLibrary
 from escort.context.mock_data import mock_import_item
 from escort.context.sources.registry import Connectors
 from escort.context.prep_chat import prep_chat
+from escort.desktop import live_capture
 from escort.desktop.devices import list_audio_devices
+from escort.desktop.overlay import DEFAULT_OPACITY, clamp_opacity
 from escort.desktop.secret_store import MemorySecretStore, SecretStore, open_secret_store
-from escort.paths import repo_root
 from escort.replay import build_pipeline, load_scenario, run_replay
-from escort.settings import load_settings
-from escort.store import MeetingStore
+from escort.settings import Settings, load_settings
+from escort.store import MeetingStore, utc_now
+from escort.summary import empty_summary, generate_summary, rules_summary
 
 if TYPE_CHECKING:
     from escort.desktop.overlay import OverlayController
+
+
+class MainWindowController(Protocol):
+    def show(self) -> None: ...
+
+    def hide(self) -> None: ...
+
+
+IDLE_SCREEN = {"monitoring": False, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0}
 
 log = logging.getLogger("escort.desktop")
 
@@ -53,16 +67,31 @@ class DesktopRuntime:
         secrets: SecretStore | None = None,
         config_path: Path | None = None,
         connectors: Connectors | None = None,
+        summary_client: httpx.Client | None = None,
     ) -> None:
         self.store = store
         self.secrets = secrets or open_secret_store()
         self.config_path = config_path or (config_dir() / "config.json")
         self.listening = False
+        self.listening_started_at: str | None = None
         self._lock = threading.RLock()
         self.prefs = self._read_prefs()
         self.overlay: OverlayController | None = None
         self.overlay_visible = False
+        self.overlay_collapsed = False
+        self.overlay_input_focus = False
+        self.main_window: MainWindowController | None = None
+        self._main_hidden = False
+        self.live: live_capture.LiveSession | None = None
+        self.summary: dict[str, Any] = empty_summary()
+        self._summary_gen = 0
+        self._summary_thread: threading.Thread | None = None
+        self._summary_client = summary_client
         self._observers: list[Callable[[], None]] = []
+        key = self.secrets.get("meta_api_key")
+        if key and not os.environ.get("MODEL_API_KEY"):
+            # Keychain survives restarts; Muse clients read the key from the environment.
+            os.environ["MODEL_API_KEY"] = key
         self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
         self.context = ContextLibrary(store.media_dir.parent, self.secrets.get, connectors=self.connectors)
 
@@ -85,10 +114,27 @@ class DesktopRuntime:
         safe = {key: value for key, value in self.prefs.items() if key not in KEY_NAMES and "key" not in key and "token" not in key and "secret" not in key}
         self.config_path.write_text(json.dumps(safe, indent=2), encoding="utf-8")
 
+    def _settings(self) -> Settings:
+        settings = load_settings()
+        key = self.secrets.get("meta_api_key") or settings.api_key
+        return dataclasses.replace(settings, api_key=key or None)
+
+    def screen_status(self) -> dict[str, Any]:
+        live = self.live
+        return live.screen() if live is not None else dict(IDLE_SCREEN)
+
+    def capture_error(self) -> str | None:
+        live = self.live
+        return live.error() if live is not None else None
+
     def public_status(self) -> dict[str, Any]:
         snapshot = self.store.snapshot()
         return {
             "listening": self.listening,
+            "listening_started_at": self.listening_started_at,
+            "screen": self.screen_status(),
+            "capture_error": self.capture_error(),
+            "summary": self.summary_status(),
             "has_meta_key": bool(self.secrets.get("meta_api_key")),
             "has_whatsapp_token": bool(self.secrets.get("whatsapp_access_token")),
             "prefs": {
@@ -203,22 +249,123 @@ class DesktopRuntime:
         return self.connectors.disconnect(provider)
 
     def set_listening(self, on: bool) -> dict[str, Any]:
-        self.listening = on
-        if on and self.store.mode in {"idle", "deleted"}:
-            self.store.mode = "live"
-        if not on and self.store.mode == "live":
-            self.store.mode = "idle"
-        self._set_overlay_visible(on)
+        with self._lock:
+            was = self.listening
+            self.listening = on
+            if on and self.store.mode in {"idle", "deleted"}:
+                self.store.mode = "live"
+            if not on and self.store.mode == "live":
+                self.store.mode = "idle"
+            if on and not was:
+                self.listening_started_at = utc_now()
+                self._summary_gen += 1
+                self.summary = empty_summary()
+                self._start_capture()
+            elif not on and was:
+                self.listening_started_at = None
+                self._begin_summary(stop_session=self.live)
+        self._set_overlay_visible(on, bring_main=not on)
         self._notify()
         return self.public_status()
 
-    def delete_meeting(self) -> dict[str, Any]:
+    def _start_capture(self) -> None:
+        """Start screen + audio capture over the store. Never raises; errors land in capture_error."""
+        settings = self._settings()
+        if not self.store.title:
+            self.store.title = "Live meeting"
+        try:
+            self.live = live_capture.start_session(
+                self.store,
+                settings,
+                self.context.combined_markdown(),
+                mic_id=self.prefs.get("mic_id"),
+                loopback_id=self.prefs.get("loopback_id"),
+                on_pipeline=lambda: self.context.apply_to_store(self.store),
+            )
+        except Exception as exc:
+            log.warning("Live capture failed to start: %s", exc)
+            self.store.warn(f"Live capture did not start: {exc}")
+            self.live = None
+
+    def _stop_capture(self, timeout: float = 6.0) -> None:
+        live = self.live
+        if live is not None:
+            try:
+                live.stop(timeout=timeout)
+            except Exception as exc:
+                log.warning("Live capture did not stop cleanly: %s", exc)
+
+    def shutdown(self) -> None:
+        """App exit: stop capture threads (they are daemons, but release devices first)."""
         self.listening = False
-        self.store.delete_meeting()
-        self.context.clear()
-        self._set_overlay_visible(False)
+        self._stop_capture(timeout=2.0)
+
+    def delete_meeting(self) -> dict[str, Any]:
+        with self._lock:
+            self.listening = False
+            self.listening_started_at = None
+            self._summary_gen += 1
+            self.summary = empty_summary()
+            self._stop_capture(timeout=2.0)
+            self.live = None
+            self.store.delete_meeting()
+            self.context.clear()
+        self._set_overlay_visible(False, bring_main=True)
         self._notify()
         return self.public_status()
+
+    # --- summary -------------------------------------------------------------
+
+    def summary_status(self) -> dict[str, Any]:
+        return dict(self.summary)
+
+    def regenerate_summary(self) -> dict[str, Any]:
+        with self._lock:
+            if not self.listening:
+                self._begin_summary(stop_session=None)
+        return self.summary_status()
+
+    def transcript(self) -> dict[str, Any]:
+        with self.store.lock:
+            return {
+                "turns": [item.to_dict() for item in self.store.utterances],
+                "partials": dict(self.store.partials),
+                "listening": self.listening,
+                "listening_started_at": self.listening_started_at,
+            }
+
+    def _begin_summary(self, stop_session: live_capture.LiveSession | None) -> None:
+        self._summary_gen += 1
+        generation = self._summary_gen
+        self.summary = {**empty_summary("generating"), "title": self.store.title}
+        thread = threading.Thread(
+            target=self._run_summary, args=(generation, stop_session), name="escort-summary", daemon=True
+        )
+        self._summary_thread = thread
+        thread.start()
+
+    def _run_summary(self, generation: int, stop_session: live_capture.LiveSession | None) -> None:
+        if stop_session is not None:
+            # Join the capture threads first so the last finished turns are in the snapshot.
+            try:
+                stop_session.stop()
+            except Exception as exc:
+                log.warning("Live capture did not stop cleanly: %s", exc)
+        snapshot: dict[str, Any] = {}
+        try:
+            snapshot = self.store.snapshot()
+            result = generate_summary(self._settings(), snapshot, self.context.combined_markdown(), self._summary_client)
+        except Exception as exc:
+            log.warning("Summary failed: %s", exc)
+            try:
+                result = rules_summary(snapshot, error=str(exc))
+            except Exception as inner:
+                result = {**empty_summary("error"), "error": str(inner), "generated_at": utc_now()}
+        with self._lock:
+            if generation != self._summary_gen:
+                return  # deleted or restarted meanwhile
+            self.summary = result
+        self._notify()
 
     # --- overlay -------------------------------------------------------------
 
@@ -233,12 +380,19 @@ class DesktopRuntime:
 
         return capture_exclusion_supported()
 
+    @property
+    def overlay_opacity(self) -> float:
+        return clamp_opacity(self.prefs.get("overlay_opacity", DEFAULT_OPACITY))
+
     def overlay_status(self) -> dict[str, Any]:
         return {
             "hide_from_share": self.hide_from_share,
             "visible": self.overlay_visible,
             "listening": self.listening,
             "supported": self.overlay_supported(),
+            "collapsed": self.overlay_collapsed,
+            "opacity": self.overlay_opacity,
+            "input_focus": self.overlay_input_focus,
         }
 
     def attach_overlay(self, controller: OverlayController | None) -> None:
@@ -247,17 +401,45 @@ class DesktopRuntime:
         if controller is None:
             return
         self._call_overlay("set_hide_from_share", self.hide_from_share)
+        self._call_optional("set_opacity", self.overlay_opacity)
+        self._call_optional("set_collapsed", self.overlay_collapsed)
         self._call_overlay("set_visible", self.overlay_visible)
 
-    def set_overlay(self, hide_from_share: bool | None = None, visible: bool | None = None) -> dict[str, Any]:
+    def attach_main_window(self, controller: MainWindowController | None) -> None:
+        self.main_window = controller
+
+    def show_main_window(self) -> None:
+        """Tray 'Show Escort': always restores and raises the main window."""
+        self._main("show")
+
+    def set_overlay(
+        self,
+        hide_from_share: bool | None = None,
+        visible: bool | None = None,
+        collapsed: bool | None = None,
+        opacity: float | None = None,
+        input_focus: bool | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             if hide_from_share is not None and hide_from_share != self.hide_from_share:
                 self.prefs["hide_from_share"] = hide_from_share
                 self._write_prefs()
             if hide_from_share is not None:
                 self._call_overlay("set_hide_from_share", hide_from_share)
+            if opacity is not None:
+                value = clamp_opacity(opacity)
+                if value != self.prefs.get("overlay_opacity"):
+                    self.prefs["overlay_opacity"] = value
+                    self._write_prefs()
+                self._call_optional("set_opacity", value)
+            if collapsed is not None:
+                self.overlay_collapsed = collapsed
+                self._call_optional("set_collapsed", collapsed)
             if visible is not None:
-                self._set_overlay_visible(visible)
+                self._set_overlay_visible(visible, bring_main=not visible)
+            if input_focus is not None and (self.overlay_visible or not input_focus):
+                self.overlay_input_focus = input_focus
+                self._call_optional("set_input_focus", input_focus)
         self._notify()
         return self.overlay_status()
 
@@ -268,17 +450,51 @@ class DesktopRuntime:
         """Called after listening or overlay state changes (used by the tray)."""
         self._observers.append(callback)
 
-    def _set_overlay_visible(self, visible: bool) -> None:
-        self.overlay_visible = visible
-        self._call_overlay("set_visible", visible)
+    def _set_overlay_visible(self, visible: bool, bring_main: bool = False) -> None:
+        """Show/hide the overlay; the main window hides while the overlay is up.
 
-    def _call_overlay(self, method: str, value: bool) -> None:
-        if self.overlay is None:
+        The main window hides *before* the overlay shows, so Windows hands
+        activation back to the user's previous app instead of the overlay. If
+        there is no overlay it is never hidden; if the overlay call fails it is
+        shown again at once, so the user is never left without a window.
+        """
+        self.overlay_visible = visible
+        if not visible:
+            self.overlay_input_focus = False
+            self._call_overlay("set_visible", False)
+            if self._main_hidden or bring_main:
+                self._main("show")
+            return
+        hide_main = self.overlay is not None and not self._main_hidden
+        if hide_main:
+            self._main("hide")
+        if not self._call_overlay("set_visible", True) and hide_main:
+            self._main("show")
+
+    def _main(self, action: str) -> None:
+        if self.main_window is None:
             return
         try:
+            getattr(self.main_window, action)()
+            self._main_hidden = action == "hide"
+        except Exception as exc:
+            log.warning("Main window %s failed: %s", action, exc)
+
+    def _call_overlay(self, method: str, value: Any) -> bool:
+        if self.overlay is None:
+            return False
+        try:
             getattr(self.overlay, method)(value)
+            return True
         except Exception as exc:
             log.warning("Overlay %s(%s) failed: %s", method, value, exc)
+            return False
+
+    def _call_optional(self, method: str, value: Any) -> bool:
+        """Like _call_overlay, for setters older controllers (and test fakes) may not have."""
+        if self.overlay is None or not hasattr(self.overlay, method):
+            return False
+        return self._call_overlay(method, value)
 
     def _notify(self) -> None:
         for callback in list(self._observers):

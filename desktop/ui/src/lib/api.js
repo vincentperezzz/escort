@@ -1,6 +1,6 @@
 // Dev-only fixture backend: open the Vite dev server with ?mock to see every state
 // without the Python app. Production builds strip this branch entirely.
-const MOCK = import.meta.env.DEV && new URLSearchParams(window.location.search).has("mock");
+export const MOCK = import.meta.env.DEV && new URLSearchParams(window.location.search).has("mock");
 let mock = null;
 async function mockHandle(path, options) {
   mock ??= await import("./mock.js");

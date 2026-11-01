@@ -53,13 +53,37 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     def overlay() -> dict:
         return runtime.overlay_status()
 
-    @app.post("/api/overlay")
-    def set_overlay(body: dict) -> dict:
-        hide, visible = body.get("hide_from_share"), body.get("visible")
+    @app.post("/api/overlay", response_model=None)
+    def set_overlay(body: dict) -> dict | JSONResponse:
+        def flag(name: str) -> bool | None:
+            value = body.get(name)
+            return None if value is None else bool(value)
+
+        opacity = body.get("opacity")
+        if opacity is not None:
+            try:
+                opacity = float(opacity)
+            except (TypeError, ValueError):
+                return JSONResponse(status_code=422, content={"error": "opacity must be a number between 0.3 and 1.0"})
         return runtime.set_overlay(
-            hide_from_share=None if hide is None else bool(hide),
-            visible=None if visible is None else bool(visible),
+            hide_from_share=flag("hide_from_share"),
+            visible=flag("visible"),
+            collapsed=flag("collapsed"),
+            opacity=opacity,
+            input_focus=flag("input_focus"),
         )
+
+    @app.get("/api/summary")
+    def summary() -> dict:
+        return runtime.summary_status()
+
+    @app.post("/api/summary/regenerate")
+    def regenerate_summary() -> dict:
+        return runtime.regenerate_summary()
+
+    @app.get("/api/transcript")
+    def transcript() -> dict:
+        return runtime.transcript()
 
     @app.post("/api/cards/{card_id}/action")
     def action(card_id: str, body: dict) -> dict:
