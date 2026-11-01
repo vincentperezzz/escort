@@ -68,7 +68,7 @@ def _phase_conflict(section: Section) -> CardDraft:
             f"They want payment integration pulled into Phase 1. "
             f"{section.heading}: \"{section.quote()}\""
         ),
-        prd_section=section.heading,
+        prd_section=f"Notes · {section.heading}",
     )
 
 
@@ -80,7 +80,7 @@ def _fee_conflict(section: Section) -> CardDraft:
             f"They want the number on the share changed. "
             f"{section.heading}: \"{section.quote()}\""
         ),
-        prd_section=section.heading,
+        prd_section=f"Notes · {section.heading}",
     )
 
 
@@ -93,7 +93,7 @@ def _phase_reply(section: Section) -> CardDraft:
             f"section {section.anchor}, so hindi natin siya mahila sa Phase 1 "
             "without a change request. Okay lang ba na i-escalate ko muna?"
         ),
-        prd_section=section.heading,
+        prd_section=f"Notes · {section.heading}",
     )
 
 
@@ -106,7 +106,7 @@ def _fee_reply(section: Section) -> CardDraft:
             f"bago natin galawin. {section.heading} pa yan. "
             "I-confirm ko after this call, ha?"
         ),
-        prd_section=section.heading,
+        prd_section=f"Notes · {section.heading}",
     )
 
 

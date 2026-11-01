@@ -123,7 +123,11 @@ def test_rule_spark_cites_the_prd_and_emits_each_card_type(tmp_path: Path):
     assert snapshot["meeting"]["open_items"]
     assert snapshot["meeting"]["commitments"]
     assert all(item["when"] for item in snapshot["meeting"]["commitments"])
-    fee = next(card for card in snapshot["cards"] if card["prd_section"] and card["prd_section"].startswith("3."))
+    fee = next(
+        card
+        for card in snapshot["cards"]
+        if card["prd_section"] and ("Pricing" in card["prd_section"] or card["prd_section"].startswith("3."))
+    )
     assert "2.4" in fee["body"] or "finance" in fee["body"].lower()
     cropped = [card for card in snapshot["cards"] if card["deictic"] and "taas" in card["deictic"].lower()]
     assert cropped

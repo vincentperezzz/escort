@@ -69,6 +69,20 @@ python -m escort desktop --web --demo
 
 Open http://127.0.0.1:8750. MCP stays on http://127.0.0.1:8747/mcp. The WhatsApp webhook stays on port 8748.
 
+### Pre-meeting context (Context screen)
+
+- **Upload** PDF, DOCX, MD, or TXT (drag-and-drop or picker). Text is extracted locally (`pypdf`, `python-docx`), chunked by headings, and stored per meeting with `source · title` labels.
+- **Connectors** (pluggable `ContextSource`): Notion pages, Google Drive files, Google Calendar upcoming events. Tokens live in Windows Credential Manager via `keyring` (`notion_oauth_token`, `google_oauth_token`) — never in the repo.
+- **Auto-match**: On Live, **Upcoming meetings** lists mock or real calendar events. **Prep** scores uploaded + connector items against title, attendees, description, and linked-doc hints; confirm on Context to merge into live notes.
+- **Prep chat**: Taglish-friendly Muse Spark (`muse-spark-1.3`) over loaded context.
+- **WhatsApp**: send `prep` for a text summary of the next meeting’s matched context.
+- **Demo mode**: set `ESCORT_CONNECTORS=mock` (default when no tokens) for fictional BayaniPay calendar + Notion/Drive fixtures.
+
+OAuth setup (Boss):
+
+1. **Notion** — Create an integration at https://www.notion.so/my-integrations, copy the internal integration secret, share target pages/databases with the integration, paste the token in Setup (saved as `notion_oauth_token`).
+2. **Google** — In Google Cloud Console create an OAuth client (Desktop app), enable Calendar API + Drive API, complete OAuth with scopes `calendar.readonly` and `drive.readonly` (and Docs export as needed), paste the access token in Setup (`google_oauth_token`). Production builds should refresh tokens; the demo accepts a pasted bearer token via Setup or `POST /api/connectors/token`.
+
 ## Run the staged demo
 
 ```bash

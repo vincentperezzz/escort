@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const NAV = [
   ["live", "Live", "wave"],
-  ["notes", "Notes", "doc"],
+  ["context", "Context", "doc"],
   ["recap", "Recap", "list"],
   ["setup", "Setup", "gear"],
   ["settings", "Settings", "sliders"],
@@ -10,15 +10,24 @@ const NAV = [
 
 function route() {
   let name = window.location.hash.replace("#/", "") || "live";
-  if (name === "prd") name = "notes";
+  if (name === "prd" || name === "notes") name = "context";
   return NAV.some(([id]) => id === name) ? name : "live";
 }
 
-async function api(path, options) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body && typeof options.body === "string" && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const response = await fetch(path, { ...options, headers });
+  if (!response.ok) throw new Error(`${response.status}`);
+  return response.json();
+}
+
+async function apiUpload(path, file) {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch(path, { method: "POST", body });
   if (!response.ok) throw new Error(`${response.status}`);
   return response.json();
 }
@@ -56,6 +65,7 @@ export default function App() {
 
   const meeting = status?.meeting || {};
   const cards = meeting.cards || [];
+  const ctx = status?.context || {};
   const noteSections = meeting.prd_sections || [];
   const latency = meeting.latency;
 
@@ -79,9 +89,9 @@ export default function App() {
             >
               <NavIcon name={icon} active={screen === id} />
               <span>{label}</span>
-              {id === "notes" && noteSections.length ? (
+              {id === "context" && (ctx.items?.length || noteSections.length) ? (
                 <span className="mono hidden rounded-md bg-[var(--amber-soft)] px-1.5 py-0.5 text-[10px] text-[var(--amber)] md:ml-auto md:inline">
-                  {noteSections.length}
+                  {ctx.items?.length || noteSections.length}
                 </span>
               ) : null}
             </button>
@@ -116,14 +126,17 @@ export default function App() {
 
           <div className="min-h-0 flex-1 overflow-auto px-4 py-5 md:px-8">
             {screen === "setup" ? <Setup status={status} refresh={refresh} /> : null}
-            {screen === "notes" ? <Notes status={status} refresh={refresh} sections={noteSections} /> : null}
+            {screen === "context" ? <ContextScreen status={status} refresh={refresh} /> : null}
             {screen === "live" ? (
               <Live
+                status={status}
+                context={ctx}
                 cards={cards}
                 turns={meeting.utterances || []}
                 refresh={refresh}
                 transcriptOpen={transcriptOpen}
                 onToggleTranscript={() => setTranscriptOpen((v) => !v)}
+                onGoContext={() => go("context")}
               />
             ) : null}
             {screen === "recap" ? <Recap meeting={meeting.meeting || {}} /> : null}
@@ -190,7 +203,7 @@ function ListenBadge({ listening }) {
   );
 }
 
-function Live({ cards, turns, refresh, transcriptOpen, onToggleTranscript }) {
+function Live({ context, cards, turns, refresh, transcriptOpen, onToggleTranscript, onGoContext }) {
   async function act(id, action) {
     await api(`/api/cards/${id}/action`, { method: "POST", body: JSON.stringify({ action }) });
     refresh();
@@ -200,6 +213,7 @@ function Live({ cards, turns, refresh, transcriptOpen, onToggleTranscript }) {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 pb-24 md:pb-28">
+      <UpcomingMeetings context={context} refresh={refresh} onPrep={onGoContext} />
       <p className="text-sm text-[var(--ink-muted)]">
         Insights land on their own when a line finishes, tied to your scope notes.
       </p>
@@ -241,7 +255,7 @@ function InsightCard({ card, onAct }) {
       <div className="px-4 py-3">
         <p className="text-sm leading-relaxed text-[var(--ink)]">{card.body}</p>
         {card.prd_section ? (
-          <p className="mt-2 text-xs font-medium text-[var(--amber)]">Notes · {card.prd_section}</p>
+          <p className="mt-2 text-xs font-medium text-[var(--amber)]">{card.prd_section}</p>
         ) : null}
         {card.type === "PRD_CONFLICT" ? (
           <div className="mt-4 flex flex-wrap gap-2">
@@ -304,6 +318,378 @@ function TranscriptBubble({ turn }) {
   );
 }
 
+function UpcomingMeetings({ context, refresh, onPrep }) {
+  const events = context?.upcoming || [];
+  const prepEventId = context?.prep?.selected_event_id;
+  const [busy, setBusy] = useState("");
+
+  async function prep(eventId) {
+    setBusy(eventId);
+    try {
+      await api("/api/context/match", { method: "POST", body: JSON.stringify({ event_id: eventId }) });
+      await refresh();
+      onPrep?.();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  if (!events.length) return null;
+
+  return (
+    <section className="rounded-2xl border border-[var(--line)] bg-[var(--paper-elevated)] p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Upcoming meetings</h3>
+        <span className="text-[10px] font-bold tracking-[0.16em] text-[var(--ink-muted)]">CALENDAR</span>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {events.map((event) => (
+          <li
+            key={event.id}
+            className={`flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 text-sm ${
+              prepEventId === event.id ? "border-[var(--sky)] bg-[var(--paper)]" : "border-[var(--line)] bg-[var(--paper)]"
+            }`}
+          >
+            <div className="min-w-0 flex-1">
+              <p className="font-medium leading-snug">{event.title}</p>
+              <p className="text-xs text-[var(--ink-muted)]">{formatEventWhen(event.start)}</p>
+            </div>
+            <button
+              type="button"
+              disabled={busy === event.id}
+              onClick={() => prep(event.id)}
+              className="rounded-full bg-[var(--ink)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              {busy === event.id ? "Matching…" : "Prep"}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-[var(--ink-muted)]">Prep auto-matches Notion, Drive, and uploads to the event title and attendees.</p>
+    </section>
+  );
+}
+
+function formatEventWhen(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  } catch {
+    return iso;
+  }
+}
+
+function ContextScreen({ status, refresh }) {
+  const ctx = status?.context || {};
+  const sections = status?.meeting?.prd_sections || [];
+  const [paste, setPaste] = useState("");
+  const [drag, setDrag] = useState(false);
+  const [notionQ, setNotionQ] = useState("BayaniPay");
+  const [driveQ, setDriveQ] = useState("SOW");
+  const [notionHits, setNotionHits] = useState([]);
+  const [driveHits, setDriveHits] = useState([]);
+  const [proposals, setProposals] = useState(ctx.prep?.proposals || []);
+  const [picked, setPicked] = useState(new Set(ctx.prep?.confirmed_ids || []));
+  const [chatIn, setChatIn] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const prepEventId = ctx.prep?.selected_event_id;
+  const prepEvent = (ctx.upcoming || []).find((e) => e.id === prepEventId);
+
+  useEffect(() => {
+    setProposals(ctx.prep?.proposals || []);
+    setPicked(new Set(ctx.prep?.confirmed_ids || []));
+  }, [ctx.prep?.proposals, ctx.prep?.confirmed_ids]);
+
+  async function uploadFiles(fileList) {
+    const files = [...fileList];
+    for (const file of files) {
+      await apiUpload("/api/context/upload", file);
+    }
+    refresh();
+  }
+
+  async function savePaste(event) {
+    event.preventDefault();
+    if (!paste.trim()) return;
+    await api("/api/notes", { method: "POST", body: JSON.stringify({ text: paste, name: "notes.md" }) });
+    setPaste("");
+    refresh();
+  }
+
+  async function search(source, query, setter) {
+    const data = await api("/api/context/search", { method: "POST", body: JSON.stringify({ source, query }) });
+    setter(data.hits || []);
+  }
+
+  async function importHit(source, externalId) {
+    await api("/api/context/import", { method: "POST", body: JSON.stringify({ source, external_id: externalId }) });
+    refresh();
+  }
+
+  async function removeItem(id) {
+    await api(`/api/context/items/${id}`, { method: "DELETE" });
+    refresh();
+  }
+
+  async function rematch() {
+    if (!prepEventId) return;
+    const data = await api("/api/context/match", { method: "POST", body: JSON.stringify({ event_id: prepEventId }) });
+    setProposals(data.proposals || []);
+    setPicked(new Set((data.proposals || []).slice(0, 3).map((p) => p.item_id)));
+  }
+
+  async function confirmPrep() {
+    if (!prepEventId) return;
+    await api("/api/context/prep", {
+      method: "POST",
+      body: JSON.stringify({ event_id: prepEventId, item_ids: [...picked] }),
+    });
+    refresh();
+  }
+
+  async function sendChat(event) {
+    event.preventDefault();
+    if (!chatIn.trim()) return;
+    setChatBusy(true);
+    try {
+      await api("/api/context/chat", { method: "POST", body: JSON.stringify({ message: chatIn }) });
+      setChatIn("");
+      refresh();
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function togglePick(id) {
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const connectors = ctx.connectors || [];
+  const chat = ctx.chat || [];
+
+  return (
+    <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[1fr_320px]">
+      <div className="space-y-5">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight">Meeting context</h2>
+          <p className="mt-1 text-sm text-[var(--ink-muted)]">
+            Upload docs, connect Notion and Drive, then prep the next call, local-first.
+          </p>
+        </div>
+
+        <div
+          className={`rounded-2xl border-2 border-dashed px-5 py-8 text-center transition-colors ${
+            drag ? "border-[var(--sky)] bg-[var(--sky)]/5" : "border-[var(--line)] bg-[var(--paper-elevated)]"
+          }`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
+          }}
+        >
+          <p className="text-sm font-medium">Drop PDF, DOCX, MD, or TXT</p>
+          <p className="mt-1 text-xs text-[var(--ink-muted)]">Chunked by headings · stored for this meeting only</p>
+          <label className="mt-4 inline-block cursor-pointer rounded-full bg-[var(--ink)] px-4 py-2 text-sm font-semibold text-white">
+            Choose files
+            <input
+              type="file"
+              className="hidden"
+              accept=".pdf,.docx,.md,.txt,application/pdf,text/plain,text/markdown"
+              multiple
+              onChange={(e) => e.target.files?.length && uploadFiles(e.target.files)}
+            />
+          </label>
+        </div>
+
+        <form onSubmit={savePaste} className="space-y-2">
+          <textarea
+            className="min-h-[120px] w-full resize-y rounded-2xl border border-[var(--line)] bg-[var(--paper-elevated)] p-3 text-sm leading-relaxed outline-none focus:ring-2 focus:ring-[var(--sky)]"
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+            placeholder="Or paste scope bullets / markdown…"
+          />
+          <button type="submit" className="rounded-full border border-[var(--line)] px-4 py-2 text-sm font-medium">
+            Add pasted notes
+          </button>
+        </form>
+
+        <Section title="Connectors">
+          <ul className="space-y-2 text-sm">
+            {connectors.map((c) => (
+              <li key={c.name} className="flex items-center justify-between rounded-xl bg-[var(--paper)] px-3 py-2">
+                <span>{c.label}</span>
+                <span className={`text-xs font-semibold ${c.mode === "mock" ? "text-[var(--amber)]" : "text-[var(--mint)]"}`}>
+                  {c.mode === "mock" ? "Demo data" : "Live"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-[var(--ink-muted)]">OAuth tokens go in Setup → keychain only. Demo runs offline with fictional BayaniPay fixtures.</p>
+        </Section>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <ConnectorSearch
+            title="Notion"
+            query={notionQ}
+            onQuery={setNotionQ}
+            onSearch={() => search("notion", notionQ, setNotionHits)}
+            hits={notionHits}
+            onImport={(id) => importHit("notion", id)}
+          />
+          <ConnectorSearch
+            title="Drive"
+            query={driveQ}
+            onQuery={setDriveQ}
+            onSearch={() => search("drive", driveQ, setDriveHits)}
+            hits={driveHits}
+            onImport={(id) => importHit("drive", id)}
+          />
+        </div>
+
+        {prepEvent ? (
+          <Section title="Prep for this meeting">
+            <p className="text-sm font-medium">{prepEvent.title}</p>
+            <p className="text-xs text-[var(--ink-muted)]">{formatEventWhen(prepEvent.start)}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={rematch} className="rounded-full border border-[var(--line)] px-3 py-1.5 text-xs font-semibold">
+                Re-match context
+              </button>
+              <button type="button" onClick={confirmPrep} className="rounded-full bg-[var(--sky)] px-3 py-1.5 text-xs font-semibold text-white">
+                Load selected into meeting
+              </button>
+            </div>
+            {proposals.length === 0 ? (
+              <p className="mt-3 text-sm text-[var(--ink-muted)]">Hit Prep on Live or Re-match to propose docs from title, attendees, and hints.</p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {proposals.map((p) => (
+                  <li key={p.item_id} className="flex gap-2 rounded-xl border border-[var(--line)] bg-[var(--paper)] px-3 py-2 text-sm">
+                    <input type="checkbox" checked={picked.has(p.item_id)} onChange={() => togglePick(p.item_id)} className="mt-1" />
+                    <div>
+                      <p className="font-medium">
+                        {p.source_label} · {p.title}
+                      </p>
+                      <p className="text-xs text-[var(--ink-muted)]">{p.reason}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+        ) : null}
+      </div>
+
+      <aside className="flex flex-col gap-4">
+        <div className="rounded-2xl border border-[var(--line)] bg-[var(--paper-elevated)] p-4">
+          <h3 className="text-xs font-bold tracking-[0.16em] text-[var(--ink-muted)]">LIBRARY</h3>
+          {(ctx.items || []).length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--ink-muted)]">Nothing yet — upload or import from connectors.</p>
+          ) : (
+            <ul className="mt-3 max-h-56 space-y-2 overflow-auto text-sm">
+              {(ctx.items || []).map((item) => (
+                <li key={item.id} className="rounded-xl bg-[var(--paper)] px-3 py-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold text-[var(--amber)]">{item.source_label}</p>
+                      <p className="font-medium">{item.title}</p>
+                    </div>
+                    <button type="button" onClick={() => removeItem(item.id)} className="text-xs text-[var(--rose)]">
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-[var(--line)] bg-[var(--paper-elevated)] p-4">
+          <h3 className="text-xs font-bold tracking-[0.16em] text-[var(--ink-muted)]">ACTIVE CITATIONS</h3>
+          {sections.length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--ink-muted)]">Confirm prep to merge sections into Live cards.</p>
+          ) : (
+            <ul className="mt-3 max-h-40 space-y-1 overflow-auto text-xs">
+              {sections.map((section) => (
+                <li key={section.anchor + section.heading} className="rounded-lg bg-[var(--paper)] px-2 py-1.5">
+                  <span className="font-semibold text-[var(--amber)]">{section.source_label || `Notes · ${section.heading}`}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex min-h-[280px] flex-col rounded-2xl border border-[var(--line)] bg-[var(--paper-elevated)] p-4">
+          <h3 className="text-xs font-bold tracking-[0.16em] text-[var(--ink-muted)]">PREP CHAT · MUSE</h3>
+          <div className="mt-2 flex-1 space-y-2 overflow-auto text-sm">
+            {chat.length === 0 ? (
+              <p className="text-[var(--ink-muted)]">Ask: Ano ang dapat kong bantayan sa call na to?</p>
+            ) : (
+              chat.map((turn, i) => (
+                <p key={i} className={turn.role === "user" ? "text-right text-[var(--ink-muted)]" : "leading-relaxed"}>
+                  {turn.content}
+                </p>
+              ))
+            )}
+          </div>
+          <form onSubmit={sendChat} className="mt-3 flex gap-2">
+            <input
+              className="min-w-0 flex-1 rounded-xl border border-[var(--line)] bg-[var(--paper)] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--sky)]"
+              value={chatIn}
+              onChange={(e) => setChatIn(e.target.value)}
+              placeholder="What should I watch for?"
+            />
+            <button
+              type="submit"
+              disabled={chatBusy}
+              className="rounded-full bg-[var(--ink)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              Send
+            </button>
+          </form>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ConnectorSearch({ title, query, onQuery, onSearch, hits, onImport }) {
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-[var(--paper-elevated)] p-4">
+      <h4 className="text-sm font-semibold">{title}</h4>
+      <div className="mt-2 flex gap-2">
+        <input
+          className="min-w-0 flex-1 rounded-xl border border-[var(--line)] bg-[var(--paper)] px-3 py-2 text-sm"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+        />
+        <button type="button" onClick={onSearch} className="rounded-full border border-[var(--line)] px-3 py-2 text-xs font-semibold">
+          Search
+        </button>
+      </div>
+      <ul className="mt-2 space-y-2 text-sm">
+        {hits.map((hit) => (
+          <li key={hit.id} className="rounded-xl bg-[var(--paper)] px-3 py-2">
+            <p className="font-medium">{hit.title}</p>
+            <p className="line-clamp-2 text-xs text-[var(--ink-muted)]">{hit.snippet}</p>
+            <button type="button" onClick={() => onImport(hit.id)} className="mt-2 text-xs font-semibold text-[var(--sky)]">
+              Import
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function Notes({ status, refresh, sections }) {
   const [text, setText] = useState("");
   async function submit(event) {
@@ -359,6 +745,8 @@ function Setup({ status, refresh }) {
     meta_api_key: "",
     whatsapp_access_token: "",
     whatsapp_verify_token: "",
+    notion_oauth_token: "",
+    google_oauth_token: "",
     whatsapp_phone_number_id: prefs.whatsapp_phone_number_id || "",
     whatsapp_allowed_numbers: prefs.whatsapp_allowed_numbers || "",
     mic_id: prefs.mic_id || "",
@@ -378,7 +766,14 @@ function Setup({ status, refresh }) {
   async function submit(event) {
     event.preventDefault();
     await api("/api/setup", { method: "POST", body: JSON.stringify(form) });
-    setForm((current) => ({ ...current, meta_api_key: "", whatsapp_access_token: "", whatsapp_verify_token: "" }));
+    setForm((current) => ({
+      ...current,
+      meta_api_key: "",
+      whatsapp_access_token: "",
+      whatsapp_verify_token: "",
+      notion_oauth_token: "",
+      google_oauth_token: "",
+    }));
     refresh();
   }
 
@@ -394,6 +789,23 @@ function Setup({ status, refresh }) {
           onChange={(value) => setForm({ ...form, meta_api_key: value })}
           placeholder={status?.has_meta_key ? "Saved in keychain" : "LLM_..."}
         />
+      </Section>
+      <Section title="Context connectors (OAuth tokens → keychain)">
+        <Field
+          label="Notion integration token"
+          type="password"
+          value={form.notion_oauth_token}
+          onChange={(value) => setForm({ ...form, notion_oauth_token: value })}
+          placeholder="secret_… or OAuth access token"
+        />
+        <Field
+          label="Google OAuth access token"
+          type="password"
+          value={form.google_oauth_token}
+          onChange={(value) => setForm({ ...form, google_oauth_token: value })}
+          placeholder="ya29.… (Calendar + Drive scopes)"
+        />
+        <p className="text-xs text-[var(--ink-muted)]">Without tokens, Escort uses mock BayaniPay fixtures for demos.</p>
       </Section>
       <Section title="WhatsApp demo">
         <Field label="Access token" type="password" value={form.whatsapp_access_token} onChange={(v) => setForm({ ...form, whatsapp_access_token: v })} placeholder={status?.has_whatsapp_token ? "Saved" : "Test token"} />

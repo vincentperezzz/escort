@@ -133,7 +133,23 @@ class Pipeline:
                 card.trigger_text = utterance.text
                 card.latency_ms = round(max(0.0, time.perf_counter() - utterance.finished_at) * 1000, 1)
 
+    def _citation_for_heading(self, heading: str) -> str | None:
+        for section in self.store.prd_sections:
+            if section.get("heading") == heading and section.get("source_label"):
+                return str(section["source_label"])
+        return None
+
+    def _enrich_draft_citations(self, drafts: list[CardDraft]) -> None:
+        for draft in drafts:
+            if not draft.prd_section or not draft.prd_section.startswith("Notes · "):
+                continue
+            heading = draft.prd_section.removeprefix("Notes · ")
+            label = self._citation_for_heading(heading)
+            if label:
+                draft.prd_section = label
+
     def _land(self, utterance: Utterance, drafts: list[CardDraft], *, proactive: bool, source: str) -> None:
+        self._enrich_draft_citations(drafts)
         frame = self.store.latest_frame()
         evidence = None
         if any(draft.type == "PRD_CONFLICT" for draft in drafts):

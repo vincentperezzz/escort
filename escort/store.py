@@ -244,6 +244,7 @@ class MeetingStore:
                 "spark": self.spark,
                 "segmenter": self.segmenter,
                 "prd_name": self.prd_name,
+                "prd_sections": list(self.prd_sections),
                 "started_at": self.started_at,
                 "utterances": [item.to_dict() for item in self.utterances],
                 "partials": dict(self.partials),

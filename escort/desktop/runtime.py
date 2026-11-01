@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from escort.context.library import ContextLibrary
+from escort.context.prep_chat import prep_chat
 from escort.desktop.devices import list_audio_devices
 from escort.desktop.secrets import MemorySecretStore, SecretStore, open_secret_store
 from escort.paths import repo_root
@@ -13,7 +15,14 @@ from escort.replay import build_pipeline, load_scenario, run_replay
 from escort.settings import load_settings
 from escort.store import MeetingStore
 
-KEY_NAMES = ("meta_api_key", "whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token")
+KEY_NAMES = (
+    "meta_api_key",
+    "whatsapp_access_token",
+    "whatsapp_app_secret",
+    "whatsapp_verify_token",
+    "notion_oauth_token",
+    "google_oauth_token",
+)
 
 
 def config_dir() -> Path:
@@ -36,6 +45,10 @@ class DesktopRuntime:
         self.listening = False
         self._lock = threading.RLock()
         self.prefs = self._read_prefs()
+        self.context = ContextLibrary(store.media_dir.parent, self.secrets.get)
+
+    def _context_root(self) -> Path:
+        return self.store.media_dir.parent
 
     def _read_prefs(self) -> dict[str, Any]:
         if not self.config_path.exists():
@@ -68,6 +81,7 @@ class DesktopRuntime:
             },
             "devices": list_audio_devices(),
             "meeting": snapshot,
+            "context": self.context.public_view(),
             "mcp": "http://127.0.0.1:8747/mcp",
             "whatsapp": "http://127.0.0.1:8748/webhook",
         }
@@ -77,7 +91,7 @@ class DesktopRuntime:
             if body.get("meta_api_key"):
                 self.secrets.set("meta_api_key", str(body["meta_api_key"]))
                 os.environ["MODEL_API_KEY"] = str(body["meta_api_key"])
-            for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token"):
+            for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token"):
                 if body.get(name):
                     self.secrets.set(name, str(body[name]))
             for key in ("mic_id", "loopback_id", "whatsapp_phone_number_id", "whatsapp_allowed_numbers", "whatsapp_graph_version"):
@@ -87,20 +101,60 @@ class DesktopRuntime:
         return self.public_status()
 
     def set_prd(self, text: str, name: str = "uploaded.md") -> dict[str, Any]:
-        from escort.prd import parse_sections
-
-        self.store.prd_name = name
-        self.store.prd_sections = [
-            {"anchor": section.anchor, "heading": section.heading, "quote": section.quote()}
-            for section in parse_sections(text)
-        ]
-        path = self.store.media_dir.parent / "prd.md"
-        path.write_text(text, encoding="utf-8")
+        self.context.add_paste(text, title=name)
+        self.context.apply_to_store(self.store)
         return self.public_status()
+
+    def context_upload(self, filename: str, data: bytes) -> dict[str, Any]:
+        with self._lock:
+            self.context.add_upload(filename, data)
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def context_remove(self, item_id: str) -> dict[str, Any]:
+        with self._lock:
+            self.context.remove_item(item_id)
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def context_import(self, source: str, external_id: str) -> dict[str, Any]:
+        with self._lock:
+            self.context.import_external(source, external_id)
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def context_search(self, source: str, query: str) -> dict[str, Any]:
+        return {"hits": self.context.search_connector(source, query)}
+
+    def context_match(self, event_id: str) -> dict[str, Any]:
+        event, proposals = self.context.propose_matches(event_id)
+        return {
+            "event": event.to_dict() if event else None,
+            "proposals": [item.to_dict() for item in proposals],
+        }
+
+    def context_prep(self, event_id: str, item_ids: list[str]) -> dict[str, Any]:
+        with self._lock:
+            self.context.confirm_prep(event_id, item_ids)
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def context_chat(self, message: str) -> dict[str, Any]:
+        with self._lock:
+            self.context.append_chat("user", message)
+            answer = prep_chat(message, self.context.combined_markdown(), self.context.chat_history())
+            self.context.append_chat("assistant", answer)
+        return {"reply": answer, "context": self.context.public_view()}
 
     def load_demo(self) -> dict[str, Any]:
         scenario = load_scenario()
         settings = load_settings()
+        self.context.clear()
+        self.context.add_paste(scenario.prd_text, title="BayaniPay scope (demo)")
+        self.context.import_external("notion", "notion_phase_scope")
+        self.context.import_external("drive", "drive_sow")
+        self.context.confirm_prep("evt_bayani_scope", [item.id for item in self.context.items()[:2]])
+        self.context.apply_to_store(self.store)
         pipeline = build_pipeline(
             self.store,
             scenario,
@@ -109,6 +163,7 @@ class DesktopRuntime:
             spark_mode="rules",
             segmenter_mode="fallback",
         )
+        self.context.apply_to_store(self.store)
         run_replay(pipeline, scenario, pace_ms=0)
         return self.public_status()
 
@@ -123,6 +178,7 @@ class DesktopRuntime:
     def delete_meeting(self) -> dict[str, Any]:
         self.listening = False
         self.store.delete_meeting()
+        self.context.clear()
         return self.public_status()
 
     def act(self, card_id: str, action: str) -> dict[str, Any]:

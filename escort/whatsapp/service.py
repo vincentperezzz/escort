@@ -131,6 +131,13 @@ class WhatsAppService:
 
     def _text(self, session: PhoneSession, text: str) -> None:
         command = " ".join(text.lower().split())
+        if command == "prep":
+            from escort.context.library import ContextLibrary
+
+            lib = ContextLibrary(self.store.media_dir.parent, lambda _key: None)
+            summary = lib.prep_summary()
+            self.graph.send_text(session.number, summary[:3500])
+            return
         if command == "start meeting":
             session.meeting_open = True
             self.graph.send_text(
