@@ -1,17 +1,28 @@
 @import "tailwindcss";
 
 :root {
-  color: #1a140f;
-  background: #efe6d6;
-  font-family: "Source Sans 3", sans-serif;
+  --ink: #0c0e14;
+  --ink-soft: #161922;
+  --ink-muted: #8b93a7;
+  --paper: #f6f4ef;
+  --paper-elevated: #ffffff;
+  --line: rgba(12, 14, 20, 0.08);
+  --amber: #e8a020;
+  --amber-soft: rgba(232, 160, 32, 0.14);
+  --rose: #d64545;
+  --rose-soft: rgba(214, 69, 69, 0.12);
+  --mint: #1f9d76;
+  --mint-soft: rgba(31, 157, 118, 0.12);
+  --sky: #3d7cff;
+  --sky-soft: rgba(61, 124, 255, 0.12);
+  color: var(--ink);
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(900px 280px at 0% -10%, rgba(196, 123, 18, 0.16), transparent 50%),
-    #efe6d6;
+  background: var(--paper);
 }
 
 button,
@@ -25,11 +36,28 @@ select {
   min-height: 100vh;
 }
 
-.mark {
-  font-family: Fraunces, serif;
-  font-style: italic;
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
-.num {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(31, 157, 118, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(31, 157, 118, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(31, 157, 118, 0);
+  }
+}
+
+.listen-pulse {
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .listen-pulse {
+    animation: none;
+  }
 }

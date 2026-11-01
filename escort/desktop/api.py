@@ -29,6 +29,7 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
         return runtime.save_setup(body)
 
     @app.post("/api/prd")
+    @app.post("/api/notes")
     def prd(body: dict) -> dict:
         return runtime.set_prd(str(body.get("text") or ""), str(body.get("name") or "uploaded.md"))
 

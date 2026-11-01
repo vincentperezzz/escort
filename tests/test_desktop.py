@@ -23,6 +23,14 @@ def test_setup_stores_the_key_in_the_keychain_not_the_config_file(tmp_path: Path
     assert runtime.prefs["mic_id"] == "default-mic"
 
 
+def test_notes_endpoint_accepts_scope_markdown(tmp_path: Path):
+    client, _runtime = _client(tmp_path)
+    text = "### Fees\nNo changes on this call.\n"
+    response = client.post("/api/notes", json={"text": text})
+    assert response.status_code == 200
+    assert response.json()["meeting"]["prd_sections"]
+
+
 def test_live_demo_cards_actions_and_delete(tmp_path: Path):
     client, runtime = _client(tmp_path)
     demo = client.post("/api/demo")
