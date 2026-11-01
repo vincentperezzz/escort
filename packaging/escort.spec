@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
-root = Path(SPECPATH).resolve().parent.parent
+root = Path(SPECPATH).resolve().parent
 ui = root / "desktop" / "ui" / "dist"
 datas = []
 if (ui / "index.html").exists():
