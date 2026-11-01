@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CaretDown, CaretUp, Play, Stop, ArrowUp, X, Lightning, ChatCircleText, ListChecks, ArrowsClockwise, Drop } from "@phosphor-icons/react";
 import Logo from "../components/Logo.jsx";
-import { api, post, mmss, MOCK } from "../lib/api.js";
+import { api, post, mmss } from "../lib/api.js";
 import ScreenLine from "../components/ScreenLine.jsx";
 import ChangedChips from "../components/ChangedChips.jsx";
-import OpacitySlider from "../components/OpacitySlider.jsx";
 import { useOverlay } from "../lib/useOverlay.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
@@ -16,239 +15,477 @@ const QUICK = [
   { id: "recap", label: "Recap", Icon: ListChecks, prompt: "Give me a quick recap of the call so far: open items and who promised what." },
 ];
 
+/** The Electron overlay's bridge (overlay/preload.js); absent in a plain browser. */
+const bridge = typeof window !== "undefined" ? window.escortOverlay : undefined;
+
 /**
- * The frameless always-on-top overlay (#/overlay): a control pill plus a glass
- * panel with the latest cards, quick actions and a one-line ask box.
+ * Clicks over transparent pixels fall through to the desktop. Only elements
+ * marked data-hit take the mouse; the main process forwards mouse moves so we
+ * can tell when the pointer is over one.
  */
-export default function Overlay() {
+function useClickThrough() {
+  useEffect(() => {
+    if (!bridge) return undefined;
+    let ignoring = null;
+    let held = false; // a press that started on a hit element keeps the mouse until release
+    const set = (ignore) => {
+      if (ignore !== ignoring) {
+        ignoring = ignore;
+        bridge.setIgnoreMouse(ignore);
+      }
+    };
+    const onMove = (e) => {
+      if (!held) set(!(e.target instanceof Element && e.target.closest("[data-hit]")));
+    };
+    const onDown = (e) => {
+      held = e.target instanceof Element && Boolean(e.target.closest("[data-hit]"));
+    };
+    const onUp = (e) => {
+      held = false;
+      onMove(e);
+    };
+    const onLeave = () => {
+      if (!held) set(true);
+    };
+    set(true);
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointerup", onUp, true);
+    document.documentElement.addEventListener("mouseleave", onLeave);
+    return () => {
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointerup", onUp, true);
+      document.documentElement.removeEventListener("mouseleave", onLeave);
+    };
+  }, []);
+}
+
+/**
+ * Move the window by dragging the pill's empty area. Pointer capture keeps the
+ * drag alive as the window slides under the cursor; screen coordinates stay valid.
+ */
+function useWindowDrag() {
+  const from = useRef(null);
+  const frame = useRef(0);
+  return useMemo(() => {
+    if (!bridge?.dragStart) return {};
+    const end = (e) => {
+      if (!from.current) return;
+      cancelAnimationFrame(frame.current);
+      bridge.dragMove(e.screenX - from.current.x, e.screenY - from.current.y);
+      from.current = null;
+      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      bridge.dragEnd();
+    };
+    return {
+      onPointerDown: (e) => {
+        if (e.button !== 0 || e.target.closest("button, input, a")) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        from.current = { x: e.screenX, y: e.screenY };
+        bridge.dragStart();
+      },
+      onPointerMove: (e) => {
+        if (!from.current) return;
+        const dx = e.screenX - from.current.x;
+        const dy = e.screenY - from.current.y;
+        cancelAnimationFrame(frame.current);
+        frame.current = requestAnimationFrame(() => bridge.dragMove(dx, dy));
+      },
+      onPointerUp: end,
+      onPointerCancel: end,
+    };
+  }, []);
+}
+
+/** GET /api/status every 1.2s, but only hand React a new object when something changed. */
+function useStatus() {
   const [status, setStatus] = useState(null);
   const [offline, setOffline] = useState(false);
-  const ov = useOverlay({ pollMs: 2000 });
-  const collapsed = Boolean(ov.collapsed);
-  const open = !collapsed;
-  const opacity = Number.isFinite(ov.opacity) ? ov.opacity : 0.92;
-  const [tuning, setTuning] = useState(false);
-  const focused = useRef(false);
-  const [answer, setAnswer] = useState(null); // { label, text } | { label, pending: true } | { label, error }
-  const [input, setInput] = useState("");
-  const [acting, setActing] = useState("");
-
+  const last = useRef("");
   const refresh = useCallback(async () => {
     try {
-      setStatus(await api("/api/status"));
+      const data = await api("/api/status");
+      const key = JSON.stringify(data);
+      if (key !== last.current) {
+        last.current = key;
+        setStatus(data);
+      }
       setOffline(false);
     } catch {
       setOffline(true);
     }
   }, []);
-
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, 1200);
     return () => clearInterval(id);
   }, [refresh]);
+  return { status, offline, refresh };
+}
+
+/** Stable across polls as long as the card list itself is unchanged. */
+function useCards(meeting) {
+  const raw = meeting?.cards;
+  const key = JSON.stringify(raw || []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => (raw || []).slice().reverse(), [key]);
+}
+
+/**
+ * The in-meeting overlay (#/overlay). No container: a floating control pill and,
+ * below it, separate glass pieces (answer and cards, quick actions, ask capsule)
+ * on a fully transparent page. Opacity is applied to the native window.
+ */
+export default function Overlay() {
+  useClickThrough();
+  const { status, offline, refresh } = useStatus();
+  const ov = useOverlay({ pollMs: 2000 });
+  const { update: updateOverlay, reload: reloadOverlay } = ov;
+  const collapsed = Boolean(ov.collapsed);
+  const opacity = Number.isFinite(ov.opacity) ? ov.opacity : 0.92;
+  const [tuning, setTuning] = useState(false);
+  const [answer, setAnswer] = useState(null); // { label, text } | { label, pending: true } | { label, error }
+  const [acting, setActing] = useState("");
 
   const listening = Boolean(status?.listening);
-  const elapsed = useListenClock(listening, listeningSince(status));
-  const meeting = status?.meeting || {};
-  const cards = (meeting.cards || []).slice().reverse();
+  const startedAt = listeningSince(status);
+  const meeting = status?.meeting;
+  const cards = useCards(meeting);
   const conflict = cards.find((c) => kindOf(c.type) === "conflict");
   const rest = cards.filter((c) => c !== conflict).slice(0, conflict ? 2 : 3);
+  const latency = meeting?.latency?.count ? `Median speech-to-card ${Math.round(meeting.latency.p50_ms)}ms` : "";
 
-  const setFocus = useCallback((on) => {
-    focused.current = on;
-    post("/api/overlay", { input_focus: on }).catch(() => {});
-  }, []);
-  useEffect(() => () => { if (focused.current) post("/api/overlay", { input_focus: false }).catch(() => {}); }, []);
-
-  function toggleCollapsed() {
+  const toggleCollapsed = useCallback(() => {
     setTuning(false);
-    ov.update({ collapsed: !collapsed });
-  }
+    bridge?.setCollapsed(!collapsed);
+    updateOverlay({ collapsed: !collapsed });
+  }, [collapsed, updateOverlay]);
 
-  async function toggleListen() {
+  const toggleListen = useCallback(async () => {
     try {
       await post("/api/listen", { on: !listening });
     } finally {
       refresh();
     }
-  }
+  }, [listening, refresh]);
 
-  async function act(id, action) {
-    setActing(`${id}:${action}`);
-    try {
-      await post(`/api/cards/${id}/action`, { action });
-    } finally {
-      setActing("");
-      refresh();
-    }
-  }
-
-  async function ask(label, message) {
-    const text = message.trim();
-    if (!text) return;
-    setAnswer({ label, pending: true });
-    try {
-      const data = await post("/api/context/chat", { message: text });
-      setAnswer({ label, text: data?.reply || "No answer came back.", changed: data?.changed });
-      if (data?.changed?.length) {
-        // A chat command changed a setting: pull the new display / opacity / share state now.
+  const act = useCallback(
+    async (id, action) => {
+      setActing(`${id}:${action}`);
+      try {
+        await post(`/api/cards/${id}/action`, { action });
+      } finally {
+        setActing("");
         refresh();
-        ov.reload();
       }
-    } catch (err) {
-      setAnswer({ label, error: `Muse didn't answer (${err.message || "no response"}).` });
-    }
-  }
+    },
+    [refresh],
+  );
+
+  const ask = useCallback(
+    async (label, message) => {
+      const text = message.trim();
+      if (!text) return;
+      setAnswer({ label, pending: true });
+      try {
+        const data = await post("/api/context/chat", { message: text });
+        setAnswer({ label, text: data?.reply || "No answer came back.", changed: data?.changed });
+        if (data?.changed?.length) {
+          // A chat command changed a setting: pull the new display / opacity / share state now.
+          refresh();
+          reloadOverlay();
+        }
+      } catch (err) {
+        setAnswer({ label, error: `Muse didn't answer (${err.message || "no response"}).` });
+      }
+    },
+    [refresh, reloadOverlay],
+  );
+
+  const closeAnswer = useCallback(() => setAnswer(null), []);
+  const toggleTuning = useCallback(() => setTuning((v) => !v), []);
+  const commitOpacity = useCallback((v) => updateOverlay({ opacity: v }), [updateOverlay]);
+  const busy = Boolean(answer?.pending);
 
   return (
-    <div
-      className="flex h-full w-full flex-col items-center gap-2 bg-transparent p-2 text-ink"
-      style={MOCK && ov.opacity != null ? { opacity } : undefined}
-    >
-      <div className="pywebview-drag-region glass-solid flex w-full max-w-[440px] items-center gap-2 rounded-full py-1.5 pl-1.5 pr-1.5">
-        <Logo state={listening ? "live" : "idle"} size={30} />
-        <div className="pywebview-drag-region flex min-w-0 flex-1 items-center gap-2 pl-1">
-          {listening ? (
-            <span className="mono text-[14px] font-medium tracking-tight text-ink" aria-label={`Listening for ${mmss(elapsed)}`}>
-              {mmss(elapsed)}
-            </span>
-          ) : (
-            <span className="text-[13px] font-medium text-muted">{offline ? "Escort offline" : "Ready"}</span>
-          )}
-          {cards.length ? <span className="mono rounded-full bg-white/[0.07] px-1.5 text-[10.5px] leading-4 text-muted">{cards.length}</span> : null}
-        </div>
-        {open ? (
-          <button
-            type="button"
-            onClick={() => setTuning((v) => !v)}
-            aria-expanded={tuning}
-            aria-label="Overlay transparency"
-            title="Overlay transparency"
-            className={`press grid h-8 w-8 shrink-0 place-items-center rounded-full hover:bg-white/[0.1] ${tuning ? "bg-white/[0.12] text-ink" : "bg-white/[0.06] text-muted"}`}
-          >
-            <Drop size={15} aria-hidden />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-expanded={open}
-          className="press flex h-8 items-center gap-1 rounded-full bg-white/[0.06] pl-3 pr-2.5 text-[12.5px] font-medium text-ink/90 hover:bg-white/[0.1]"
-        >
-          {open ? "Hide" : "Show"}
-          {open ? <CaretUp size={13} aria-hidden /> : <CaretDown size={13} aria-hidden />}
-        </button>
-        <button
-          type="button"
-          onClick={toggleListen}
-          disabled={offline}
-          aria-label={listening ? "Stop listening" : "Start listening"}
-          title={listening ? "Stop listening" : "Start listening"}
-          className={`press grid h-8 w-8 shrink-0 place-items-center rounded-full disabled:opacity-40 ${
-            listening ? "bg-conflict text-[#1d0703] hover:bg-[#ff7d6b]" : "bg-ink text-bg hover:bg-white"
-          }`}
-        >
-          {listening ? <Stop size={13} weight="fill" aria-hidden /> : <Play size={13} weight="fill" aria-hidden />}
-        </button>
-      </div>
+    <div className="flex h-full w-full flex-col gap-2.5 p-2.5 text-ink">
+      <Pill
+        listening={listening}
+        startedAt={startedAt}
+        offline={offline}
+        title={meeting?.title || ""}
+        hint={latency}
+        count={cards.length}
+        open={!collapsed}
+        tuning={tuning}
+        onTune={toggleTuning}
+        onToggle={toggleCollapsed}
+        onListen={toggleListen}
+      />
 
-      {open && tuning ? (
-        <div className="rise glass-solid flex w-full max-w-[440px] items-center gap-3 rounded-full py-2 pl-4 pr-3">
-          <Drop size={14} className="shrink-0 text-faint" aria-hidden />
-          <OpacitySlider value={opacity} onChange={(v) => ov.update({ opacity: v })} className="flex-1" />
-        </div>
-      ) : null}
+      {!collapsed && tuning ? <TuneBar opacity={opacity} onCommit={commitOpacity} /> : null}
 
-      {open ? (
-        <section className="rise glass-solid flex min-h-0 w-full max-w-[440px] flex-1 flex-col overflow-hidden rounded-[24px]" aria-label="Escort live panel">
-          <header className="pywebview-drag-region flex items-center justify-between gap-3 px-4 pb-2 pt-3.5">
-            <p className="pywebview-drag-region truncate text-[12.5px] font-medium text-muted">{meeting.title || "Live session"}</p>
-            {meeting.latency?.count ? (
-              <p className="mono shrink-0 text-[11px] text-faint" title="Median time from speech to card">
-                p50 {Math.round(meeting.latency.p50_ms)}ms
-              </p>
-            ) : null}
-          </header>
-
-          <div className="scroll-thin min-h-0 flex-1 space-y-2 overflow-auto px-2.5 pb-2.5">
-            {answer ? <Answer answer={answer} onClose={() => setAnswer(null)} /> : null}
+      {!collapsed ? (
+        <>
+          <div className="ov-stack -mx-2.5 -mb-2.5 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2.5 pb-5" aria-label="Escort live cards">
+            {answer ? <Answer answer={answer} onClose={closeAnswer} /> : null}
             {conflict ? <ConflictCard card={conflict} onAct={act} acting={acting} /> : null}
             {rest.map((card) => (
               <MiniCard key={card.id} card={card} />
             ))}
-            <ScreenLine status={status} className="px-2 pt-1" />
-            {!cards.length ? (
-              <p className="px-2 py-5 text-center text-[13px] leading-relaxed text-muted">
-                {offline
-                  ? "Can't reach Escort. Retrying."
-                  : listening
-                    ? "Listening. Cards land here when a line crosses your notes."
-                    : "Press play to start listening."}
-              </p>
-            ) : null}
+            {!cards.length && !answer ? <EmptyNote offline={offline} listening={listening} /> : null}
+            <ScreenChip status={status} />
           </div>
-
-          <div className="space-y-2 bg-black/20 px-2.5 pb-2.5 pt-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-            <div className="flex flex-nowrap justify-between gap-1">
-              {QUICK.map(({ id, label, title, Icon, prompt }) => (
-                <button
-                  key={id}
-                  type="button"
-                  title={title || label}
-                  onClick={() => ask(label, prompt)}
-                  disabled={answer?.pending}
-                  className="press inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-full bg-white/[0.06] px-2 text-[11.5px] font-medium tracking-tight text-ink/90 hover:bg-white/[0.1] disabled:opacity-50"
-                >
-                  <Icon size={12} aria-hidden />
-                  {label}
-                </button>
-              ))}
-            </div>
-            <form
-              className="flex items-center gap-2 rounded-full bg-black/30 py-1 pl-4 pr-1 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.09)] focus-within:shadow-[inset_0_0_0_1px_rgba(139,124,255,0.5)]"
-              onSubmit={(e) => {
-                e.preventDefault();
-                ask("You asked", input);
-                setInput("");
-              }}
-            >
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onFocus={() => setFocus(true)}
-                onBlur={() => setFocus(false)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    if (!answer?.pending) ask(QUICK[0].label, QUICK[0].prompt);
-                  }
-                }}
-                placeholder="Ask Muse…"
-                aria-label="Ask Muse"
-                className="h-8 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint focus-visible:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || answer?.pending}
-                aria-label="Send"
-                className="press grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink text-bg disabled:bg-white/[0.08] disabled:text-faint"
-              >
-                <ArrowUp size={15} weight="regular" aria-hidden />
-              </button>
-            </form>
-          </div>
-        </section>
+          <QuickRow onAsk={ask} busy={busy} />
+          <Composer onAsk={ask} busy={busy} />
+        </>
       ) : null}
     </div>
   );
 }
 
-function ConflictCard({ card, onAct, acting }) {
+const Clock = memo(function Clock({ listening, startedAt }) {
+  const elapsed = useListenClock(listening, startedAt);
   return (
-    <article className="rise relative overflow-hidden rounded-[18px] bg-[rgba(255,106,85,0.1)] p-4 shadow-[inset_0_0_0_1px_rgba(255,106,85,0.28)]">
+    <span className="mono shrink-0 text-[14px] font-medium tracking-tight text-ink" aria-label={`Listening for ${mmss(elapsed)}`}>
+      {mmss(elapsed)}
+    </span>
+  );
+});
+
+const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, count, open, tuning, onTune, onToggle, onListen }) {
+  const drag = useWindowDrag();
+  return (
+    <div
+      data-hit
+      {...drag}
+      className={`ov-glass flex h-12 shrink-0 items-center gap-1.5 rounded-full py-1.5 pl-2 pr-1.5 ${drag.onPointerDown ? "cursor-grab active:cursor-grabbing" : ""}`}
+      title={hint || undefined}
+    >
+      <Logo state={listening ? "live" : "idle"} size={32} />
+      <div className="flex min-w-0 flex-1 items-baseline gap-2 pl-1.5">
+        {listening ? <Clock listening={listening} startedAt={startedAt} /> : <span className="shrink-0 text-[13px] font-medium text-muted">{offline ? "Escort offline" : "Ready"}</span>}
+        {title && listening ? <span className="truncate text-[12px] text-faint">{title}</span> : null}
+        {count ? <span className="mono shrink-0 self-center rounded-full bg-white/[0.07] px-1.5 text-[10.5px] leading-4 text-muted">{count}</span> : null}
+      </div>
+      {open ? (
+        <button
+          type="button"
+          onClick={onTune}
+          aria-expanded={tuning}
+          aria-label="Overlay transparency"
+          title="Overlay transparency"
+          className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full hover:bg-white/[0.1] ${tuning ? "bg-white/[0.12] text-ink" : "bg-white/[0.05] text-muted"}`}
+        >
+          <Drop size={15} aria-hidden />
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="press flex h-9 shrink-0 items-center gap-1 rounded-full bg-white/[0.05] pl-3.5 pr-3 text-[12.5px] font-medium text-ink/90 hover:bg-white/[0.1]"
+      >
+        {open ? "Hide" : "Show"}
+        {open ? <CaretUp size={13} aria-hidden /> : <CaretDown size={13} aria-hidden />}
+      </button>
+      <button
+        type="button"
+        onClick={onListen}
+        disabled={offline}
+        aria-label={listening ? "Stop listening" : "Start listening"}
+        title={listening ? "Stop listening" : "Start listening"}
+        className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full disabled:opacity-40 ${
+          listening ? "bg-conflict text-[#1d0703] hover:bg-[#ff7d6b]" : "bg-ink text-bg hover:bg-white"
+        }`}
+      >
+        {listening ? <Stop size={13} weight="fill" aria-hidden /> : <Play size={13} weight="fill" aria-hidden />}
+      </button>
+    </div>
+  );
+});
+
+/**
+ * Opacity slider. While dragging, the thumb follows a local value and the
+ * native window follows at once; the backend hears about it at most every
+ * 100ms and once more on release, so polls never fight the drag.
+ */
+const TuneBar = memo(function TuneBar({ opacity, onCommit }) {
+  const [local, setLocal] = useState(opacity);
+  const dragging = useRef(false);
+  const sentAt = useRef(0);
+  const pending = useRef(null);
+  const timer = useRef(null);
+
+  useEffect(() => {
+    if (!dragging.current) setLocal(opacity);
+  }, [opacity]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const send = useCallback(
+    (v) => {
+      clearTimeout(timer.current);
+      timer.current = null;
+      pending.current = null;
+      sentAt.current = Date.now();
+      onCommit(v);
+    },
+    [onCommit],
+  );
+
+  const onInput = (e) => {
+    const v = Number(e.target.value) / 100;
+    setLocal(v);
+    bridge?.setOpacity(v);
+    const wait = 100 - (Date.now() - sentAt.current);
+    if (wait <= 0) send(v);
+    else {
+      pending.current = v;
+      if (!timer.current) timer.current = setTimeout(() => send(pending.current), wait);
+    }
+  };
+
+  const release = (e) => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    send(Number(e.currentTarget.value) / 100);
+  };
+
+  const pct = Math.round(Math.min(1, Math.max(0.3, local)) * 100);
+  return (
+    <div data-hit className="ov-glass rise flex h-11 shrink-0 items-center gap-3 rounded-full pl-4 pr-4">
+      <Drop size={14} className="shrink-0 text-faint" aria-hidden />
+      <input
+        type="range"
+        min={30}
+        max={100}
+        step={1}
+        value={pct}
+        aria-label="Overlay opacity"
+        onPointerDown={(e) => {
+          dragging.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onChange={onInput}
+        onKeyUp={(e) => send(Number(e.currentTarget.value) / 100)}
+        className="opacity-range min-w-0 flex-1"
+        style={{ "--fill": `${((pct - 30) / 70) * 100}%` }}
+      />
+      <span className="mono w-9 shrink-0 text-right text-[12px] text-muted">{pct}%</span>
+    </div>
+  );
+});
+
+const QuickRow = memo(function QuickRow({ onAsk, busy }) {
+  return (
+    <div data-hit className="ov-glass flex h-11 shrink-0 items-center gap-1 rounded-full p-1.5">
+      {QUICK.map(({ id, label, title, Icon, prompt }) => (
+        <button
+          key={id}
+          type="button"
+          title={title || label}
+          onClick={() => onAsk(label, prompt)}
+          disabled={busy}
+          className="press inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[12px] font-medium tracking-tight text-ink/85 hover:bg-white/[0.08] hover:text-ink disabled:opacity-45"
+        >
+          <Icon size={13} aria-hidden />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+});
+
+/**
+ * The ask capsule. Its text lives here, so status polls never touch it. Focus
+ * is reported to the backend once per change; the native window only becomes
+ * focusable while the caret is in this field.
+ */
+const Composer = memo(function Composer({ onAsk, busy }) {
+  const [input, setInput] = useState("");
+  const inputRef = useRef(null);
+  const reported = useRef(false);
+
+  const report = useCallback((on) => {
+    if (reported.current === on) return;
+    reported.current = on;
+    if (on) bridge?.focusInput();
+    else bridge?.releaseFocus();
+    post("/api/overlay", { input_focus: on }).catch(() => {});
+  }, []);
+
+  useEffect(() => () => report(false), [report]);
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!input.trim() || busy) return;
+    onAsk("You asked", input);
+    setInput("");
+  };
+
+  return (
+    <form data-hit className="ov-glass ov-capsule flex h-12 shrink-0 items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5" onSubmit={submit}>
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onPointerDown={() => bridge?.focusInput()}
+        onFocus={() => report(true)}
+        onBlur={() => report(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            inputRef.current?.blur();
+          } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            if (!busy) onAsk(QUICK[0].label, QUICK[0].prompt);
+          }
+        }}
+        placeholder="Ask Muse…"
+        aria-label="Ask Muse"
+        autoComplete="off"
+        className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint focus-visible:outline-none"
+      />
+      <button
+        type="submit"
+        disabled={!input.trim() || busy}
+        aria-label="Send"
+        className="press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink text-bg disabled:bg-white/[0.08] disabled:text-faint"
+      >
+        <ArrowUp size={15} weight="regular" aria-hidden />
+      </button>
+    </form>
+  );
+});
+
+const EmptyNote = memo(function EmptyNote({ offline, listening }) {
+  return (
+    <p data-hit className="ov-glass rounded-[20px] px-4 py-3.5 text-[13px] leading-relaxed text-muted">
+      {offline ? "Can't reach Escort. Retrying." : listening ? "Listening. Cards land here when a line crosses your notes." : "Press play to start listening."}
+    </p>
+  );
+});
+
+function ScreenChip({ status }) {
+  if (!status?.screen && !status?.capture_error) return null;
+  if (!status?.listening && !status?.capture_error && !status?.screen?.monitoring) return null;
+  return (
+    <div data-hit className="ov-glass self-start rounded-full px-3 py-1.5">
+      <ScreenLine status={status} />
+    </div>
+  );
+}
+
+const ConflictCard = memo(function ConflictCard({ card, onAct, acting }) {
+  return (
+    <article data-hit className="ov-glass-conflict rise shrink-0 rounded-[22px] p-4">
       <p className="flex items-center justify-between gap-2 text-[11.5px] font-medium">
-        <span className="inline-flex items-center gap-1.5 text-conflict">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-conflict">
           <KIND.conflict.Icon size={14} aria-hidden />
           Conflict
           {card.prd_section ? <span className="truncate font-normal text-[#ffb3a7]/80">· {card.prd_section}</span> : null}
@@ -256,7 +493,7 @@ function ConflictCard({ card, onAct, acting }) {
         {Number.isFinite(card.latency_ms) ? <span className="mono font-normal text-[#ffb3a7]/70">{Math.round(card.latency_ms)}ms</span> : null}
       </p>
       <h2 className="mt-2 text-[16px] font-medium leading-snug tracking-[-0.015em] text-balance">{card.title}</h2>
-      <p className="mt-1 text-[13px] leading-relaxed text-ink/80">{card.body}</p>
+      <p className="mt-1 text-[13px] leading-relaxed text-[#f3d9d4]">{card.body}</p>
       <div className="mt-3.5 flex flex-wrap gap-1.5">
         {CONFLICT_ACTIONS.map((a, i) => (
           <button
@@ -274,13 +511,13 @@ function ConflictCard({ card, onAct, acting }) {
       </div>
     </article>
   );
-}
+});
 
-function MiniCard({ card }) {
+const MiniCard = memo(function MiniCard({ card }) {
   const k = KIND[kindOf(card.type)];
   const { Icon } = k;
   return (
-    <article className="rise rounded-[16px] bg-white/[0.035] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+    <article data-hit className="ov-glass rise shrink-0 rounded-[20px] px-4 py-3">
       <p className="flex items-center justify-between gap-2 text-[11.5px]">
         <span className={`inline-flex items-center gap-1.5 font-medium ${k.text}`}>
           <Icon size={13} aria-hidden />
@@ -292,14 +529,14 @@ function MiniCard({ card }) {
       <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-muted">{card.body}</p>
     </article>
   );
-}
+});
 
-function Answer({ answer, onClose }) {
+const Answer = memo(function Answer({ answer, onClose }) {
   return (
-    <article className="rise rounded-[16px] bg-[rgba(139,124,255,0.1)] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgba(139,124,255,0.25)]" aria-live="polite">
+    <article data-hit className="ov-glass-answer rise shrink-0 rounded-[20px] px-4 py-3" aria-live="polite">
       <p className="flex items-center justify-between gap-2 text-[11.5px] font-medium text-[#c6bfff]">
         {answer.label}
-        <button type="button" onClick={onClose} aria-label="Dismiss answer" className="press grid h-6 w-6 place-items-center rounded-full text-[#c6bfff]/80 hover:bg-white/10 hover:text-ink">
+        <button type="button" onClick={onClose} aria-label="Dismiss answer" className="press -mr-1.5 grid h-6 w-6 place-items-center rounded-full text-[#c6bfff]/80 hover:bg-white/10 hover:text-ink">
           <X size={12} aria-hidden />
         </button>
       </p>
@@ -313,10 +550,10 @@ function Answer({ answer, onClose }) {
         <p className="mt-1 text-[13px] text-conflict">{answer.error}</p>
       ) : (
         <>
-          <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-ink/90">{answer.text}</p>
+          <p className="mt-1 select-text whitespace-pre-wrap text-[13px] leading-relaxed text-ink/90">{answer.text}</p>
           <ChangedChips changed={answer.changed} className="mt-2" />
         </>
       )}
     </article>
   );
-}
+});

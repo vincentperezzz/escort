@@ -8,7 +8,11 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Escort</title>
     <script>
-      if (location.hash.indexOf("#/overlay") === 0) document.documentElement.className = "overlay-mode";
+      if (location.hash.indexOf("#/overlay") === 0) {
+        document.documentElement.className = "overlay-mode";
+        // A dark color-scheme makes Chromium paint an opaque canvas; the overlay window must stay see-through.
+        document.querySelectorAll('meta[name="color-scheme"], meta[name="theme-color"]').forEach((m) => m.remove());
+      }
     </script>
   </head>
   <body>

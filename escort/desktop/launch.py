@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -12,6 +13,7 @@ from escort.desktop import crashlog, win_overlay
 from escort.desktop.api import create_desktop_app
 from escort.desktop.hotkey import GlobalHotkey
 from escort.desktop.overlay import create_overlay
+from escort.desktop.overlay_process import ElectronOverlay, start_electron_overlay
 from escort.desktop.runtime import DesktopRuntime
 from escort.paths import repo_root
 from escort.server import AppState, create_server
@@ -113,14 +115,11 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
         threading.Event().wait()
         return
     window = webview.create_window("Escort", url, width=1120, height=780, background_color="#efe6d6")
-    overlay = create_overlay(webview, url)
-    runtime.attach_overlay(overlay)
     runtime.attach_main_window(MainWindow(window))
-    if overlay is not None:
-        # pywebview only exits once every window is gone; the overlay must not keep it alive.
-        window.events.closed += overlay.destroy
+    electron = _overlay(webview, window, url, runtime)
     icon = _tray(runtime, window)
-    hotkey = _hotkey(runtime)
+    # EscortOverlay.exe registers Ctrl+Shift+E itself; a second registrant would lose it anyway.
+    hotkey = None if electron is not None else _hotkey(runtime)
     try:
         webview.start()
     finally:
@@ -132,6 +131,31 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
                 icon.stop()
             except Exception:
                 pass
+
+
+def overlay_url(url: str) -> str:
+    """The URL the overlay process loads: loopback when the server binds every interface."""
+    for wildcard in ("://0.0.0.0:", "://[::]:"):
+        url = url.replace(wildcard, "://127.0.0.1:")
+    return url
+
+
+def _overlay(webview, window, url: str, runtime: DesktopRuntime) -> ElectronOverlay | None:
+    """Prefer the Electron overlay; fall back to the in-process pywebview overlay.
+
+    Returns the running ElectronOverlay, or None when the pywebview overlay (or no
+    overlay at all) is in use.
+    """
+    electron = start_electron_overlay(overlay_url(url), os.getpid(), on_gone=runtime.overlay_process_lost)
+    if electron is not None:
+        runtime.attach_overlay_process(electron)
+        return electron
+    overlay = create_overlay(webview, url)
+    runtime.attach_overlay(overlay)
+    if overlay is not None:
+        # pywebview only exits once every window is gone; the overlay must not keep it alive.
+        window.events.closed += overlay.destroy
+    return None
 
 
 def _hotkey(runtime: DesktopRuntime) -> GlobalHotkey | None:

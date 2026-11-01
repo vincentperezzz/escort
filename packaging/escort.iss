@@ -1,7 +1,13 @@
 #define AppName "Escort"
-#define AppVersion "0.2.0"
+#define AppVersion "0.3.0"
 #define AppPublisher "Escort"
 #define DistDir "..\dist\Escort"
+; The Electron overlay is packaged by `npm run package` in overlay/, not by PyInstaller.
+#define OverlayDir "..\overlay\out\EscortOverlay-win32-x64"
+
+#if !FileExists(AddBackslash(SourcePath) + OverlayDir + "\EscortOverlay.exe")
+  #error Missing overlay\out\EscortOverlay-win32-x64\EscortOverlay.exe. Run "npm ci" and "npm run package" in overlay\ before compiling the installer.
+#endif
 
 [Setup]
 AppId={{8F3A1C2E-6B74-4D1A-9E55-0E5C04700001}
@@ -28,9 +34,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\overlay"
 
 [Files]
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#OverlayDir}\*"; DestDir: "{app}\overlay"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Escort"; Filename: "{app}\Escort.exe"
@@ -41,6 +49,7 @@ Filename: "{app}\Escort.exe"; Description: "Launch Escort"; Flags: nowait postin
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Escort.exe"; Flags: runhidden; RunOnceId: "StopEscort"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM EscortOverlay.exe"; Flags: runhidden; RunOnceId: "StopEscortOverlay"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

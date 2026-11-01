@@ -36,6 +36,14 @@ class MainWindowController(Protocol):
     def hide(self) -> None: ...
 
 
+class OverlayProcess(Protocol):
+    """An overlay living in another process (Electron) that follows GET /api/overlay itself."""
+
+    def is_running(self) -> bool: ...
+
+    def stop(self) -> None: ...
+
+
 IDLE_SCREEN = {"monitoring": False, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0}
 MONITOR_CACHE_S = 3.0
 
@@ -85,6 +93,7 @@ class DesktopRuntime:
         self._lock = threading.RLock()
         self.prefs = self._read_prefs()
         self.overlay: OverlayController | None = None
+        self.overlay_process: OverlayProcess | None = None
         self.overlay_visible = False
         self.overlay_collapsed = False
         self.overlay_input_focus = False
@@ -390,6 +399,13 @@ class DesktopRuntime:
     def shutdown(self) -> None:
         """App exit: stop capture threads (they are daemons, but release devices first)."""
         self.listening = False
+        process = self.overlay_process
+        if process is not None:
+            # First: it is the one window still on screen.
+            try:
+                process.stop()
+            except Exception as exc:
+                log.warning("Overlay process did not stop cleanly: %s", exc)
         self._stop_capture(timeout=2.0)
 
     def delete_meeting(self) -> dict[str, Any]:
@@ -497,6 +513,24 @@ class DesktopRuntime:
         self._call_optional("set_collapsed", self.overlay_collapsed)
         self._call_overlay("set_visible", self.overlay_visible)
 
+    def attach_overlay_process(self, process: OverlayProcess | None) -> None:
+        """Electron mode: the overlay polls /api/overlay, so set_overlay only stores flags."""
+        self.overlay_process = process
+
+    def overlay_process_lost(self) -> None:
+        """The overlay process is gone for good: never leave the user without the main window."""
+        if self._main_hidden:
+            self._main("show")
+
+    def _overlay_process_running(self) -> bool:
+        process = self.overlay_process
+        if process is None:
+            return False
+        try:
+            return bool(process.is_running())
+        except Exception:
+            return False
+
     def attach_main_window(self, controller: MainWindowController | None) -> None:
         self.main_window = controller
 
@@ -548,7 +582,9 @@ class DesktopRuntime:
         The main window hides *before* the overlay shows, so Windows hands
         activation back to the user's previous app instead of the overlay. If
         there is no overlay it is never hidden; if the overlay call fails it is
-        shown again at once, so the user is never left without a window.
+        shown again at once, so the user is never left without a window. An
+        overlay process (Electron) shows itself from the stored flag; the main
+        window only hides while that process is actually running.
         """
         self.overlay_visible = visible
         if not visible:
@@ -557,11 +593,14 @@ class DesktopRuntime:
             if self._main_hidden or bring_main:
                 self._main("show")
             return
-        hide_main = self.overlay is not None and not self._main_hidden
-        if hide_main:
+        if self.overlay is not None:
+            hide_main = not self._main_hidden
+            if hide_main:
+                self._main("hide")
+            if not self._call_overlay("set_visible", True) and hide_main:
+                self._main("show")
+        elif self._overlay_process_running() and not self._main_hidden:
             self._main("hide")
-        if not self._call_overlay("set_visible", True) and hide_main:
-            self._main("show")
 
     def _main(self, action: str) -> None:
         if self.main_window is None:

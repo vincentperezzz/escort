@@ -24,6 +24,9 @@ jobs:
       - name: Build the desktop UI
         working-directory: desktop/ui
         run: npm ci && npm run build
+      - name: Package the Electron overlay
+        working-directory: overlay
+        run: npm ci && npm run package
       - name: Bundle Escort.exe
         run: pyinstaller packaging/escort.spec --noconfirm --distpath dist --workpath build/pyinstaller
       - name: Install Inno Setup

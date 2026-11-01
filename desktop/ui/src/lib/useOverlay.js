@@ -19,7 +19,8 @@ export function useOverlay({ pollMs = 0 } = {}) {
     try {
       const data = await api("/api/overlay");
       if (!alive.current) return;
-      if (data && typeof data === "object") setState((cur) => ({ ...cur, ...data }));
+      // Keep the same object when nothing changed, so a poll never re-renders its users.
+      if (data && typeof data === "object") setState((cur) => (Object.keys(data).every((k) => cur[k] === data[k]) ? cur : { ...cur, ...data }));
       setAvailable(true);
     } catch {
       if (alive.current) setAvailable(false);
