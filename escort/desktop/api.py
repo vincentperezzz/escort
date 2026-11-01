@@ -2,23 +2,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from escort.context.sources.base import ConnectorError
 from escort.desktop.runtime import DesktopRuntime
+
+PROVIDERS = ("google", "notion")
 
 
 def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Escort")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[],
+        allow_origin_regex=r"^http://(127\.0\.0\.1|localhost)(:\d+)?$",
         allow_methods=["*"],
         allow_headers=["*"],
     )
     app.state.runtime = runtime
+
+    @app.exception_handler(ConnectorError)
+    async def connector_error(_request: Request, err: ConnectorError) -> JSONResponse:
+        return JSONResponse(status_code=err.status_code, content={"error": str(err), "provider": err.provider})
 
     @app.get("/api/status")
     def status() -> dict:
@@ -80,12 +88,32 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     def context_chat(body: dict) -> dict:
         return runtime.context_chat(str(body.get("message") or ""))
 
+    @app.get("/api/connectors/status")
+    def connectors_status() -> dict:
+        return runtime.connectors_status()
+
+    @app.post("/api/connectors/google/connect")
+    def connect_google() -> dict:
+        return runtime.connect_google()
+
+    @app.post("/api/connectors/notion/connect")
+    def connect_notion(body: dict) -> dict:
+        return runtime.connect_notion(str(body.get("token") or ""))
+
+    @app.post("/api/connectors/{provider}/disconnect", response_model=None)
+    def disconnect(provider: str) -> dict | JSONResponse:
+        if provider not in PROVIDERS:
+            return JSONResponse(status_code=404, content={"error": f"Unknown connector: {provider}"})
+        return runtime.disconnect_connector(provider)
+
     @app.post("/api/connectors/token")
     def connector_token(body: dict) -> dict:
+        """Compat: store a raw token. Prefer /api/connectors/{google,notion}/connect."""
         name = str(body.get("name") or "")
-        token = str(body.get("token") or "")
-        if name and token:
-            runtime.secrets.set(f"{name}_oauth_token" if name != "google" else "google_oauth_token", token)
+        token = str(body.get("token") or "").strip()
+        if name in PROVIDERS and token:
+            runtime.secrets.set(f"{name}_oauth_token", token)
+            runtime.connectors.google.on_change()
         return runtime.public_status()
 
     if ui_dir and (ui_dir / "index.html").exists():

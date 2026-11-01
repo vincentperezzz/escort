@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from escort.context.library import ContextLibrary
+from escort.context.mock_data import mock_import_item
+from escort.context.sources.registry import Connectors
 from escort.context.prep_chat import prep_chat
 from escort.desktop.devices import list_audio_devices
 from escort.desktop.secret_store import MemorySecretStore, SecretStore, open_secret_store
@@ -22,6 +24,7 @@ KEY_NAMES = (
     "whatsapp_verify_token",
     "notion_oauth_token",
     "google_oauth_token",
+    "google_client_secret",
 )
 
 
@@ -38,14 +41,21 @@ def config_dir() -> Path:
 
 
 class DesktopRuntime:
-    def __init__(self, store: MeetingStore, secrets: SecretStore | None = None, config_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        store: MeetingStore,
+        secrets: SecretStore | None = None,
+        config_path: Path | None = None,
+        connectors: Connectors | None = None,
+    ) -> None:
         self.store = store
         self.secrets = secrets or open_secret_store()
         self.config_path = config_path or (config_dir() / "config.json")
         self.listening = False
         self._lock = threading.RLock()
         self.prefs = self._read_prefs()
-        self.context = ContextLibrary(store.media_dir.parent, self.secrets.get)
+        self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
+        self.context = ContextLibrary(store.media_dir.parent, self.secrets.get, connectors=self.connectors)
 
     def _context_root(self) -> Path:
         return self.store.media_dir.parent
@@ -78,10 +88,12 @@ class DesktopRuntime:
                 "whatsapp_phone_number_id": self.prefs.get("whatsapp_phone_number_id", ""),
                 "whatsapp_allowed_numbers": self.prefs.get("whatsapp_allowed_numbers", ""),
                 "whatsapp_graph_version": self.prefs.get("whatsapp_graph_version", "v22.0"),
+                "google_client_id": self.prefs.get("google_client_id", ""),
             },
             "devices": list_audio_devices(),
             "meeting": snapshot,
             "context": self.context.public_view(),
+            "connectors": self.connectors.status(),
             "mcp": "http://127.0.0.1:8747/mcp",
             "whatsapp": "http://127.0.0.1:8748/webhook",
         }
@@ -91,10 +103,10 @@ class DesktopRuntime:
             if body.get("meta_api_key"):
                 self.secrets.set("meta_api_key", str(body["meta_api_key"]))
                 os.environ["MODEL_API_KEY"] = str(body["meta_api_key"])
-            for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token"):
+            for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token", "google_client_secret"):
                 if body.get(name):
                     self.secrets.set(name, str(body[name]))
-            for key in ("mic_id", "loopback_id", "whatsapp_phone_number_id", "whatsapp_allowed_numbers", "whatsapp_graph_version"):
+            for key in ("mic_id", "loopback_id", "whatsapp_phone_number_id", "whatsapp_allowed_numbers", "whatsapp_graph_version", "google_client_id"):
                 if key in body:
                     self.prefs[key] = body[key]
             self._write_prefs()
@@ -151,8 +163,9 @@ class DesktopRuntime:
         settings = load_settings()
         self.context.clear()
         self.context.add_paste(scenario.prd_text, title="BayaniPay scope (demo)")
-        self.context.import_external("notion", "notion_phase_scope")
-        self.context.import_external("drive", "drive_sow")
+        # The demo is a fixed scenario: always use the bundled sample docs, never live accounts.
+        self.context.add_item(mock_import_item("notion", "notion_phase_scope"))
+        self.context.add_item(mock_import_item("drive", "drive_sow"))
         self.context.confirm_prep("evt_bayani_scope", [item.id for item in self.context.items()[:2]])
         self.context.apply_to_store(self.store)
         pipeline = build_pipeline(
@@ -166,6 +179,18 @@ class DesktopRuntime:
         self.context.apply_to_store(self.store)
         run_replay(pipeline, scenario, pace_ms=0)
         return self.public_status()
+
+    def connectors_status(self) -> dict[str, Any]:
+        return self.connectors.status()
+
+    def connect_google(self) -> dict[str, str]:
+        return self.connectors.connect_google()
+
+    def connect_notion(self, token: str) -> dict[str, Any]:
+        return self.connectors.connect_notion(token)
+
+    def disconnect_connector(self, provider: str) -> dict[str, Any]:
+        return self.connectors.disconnect(provider)
 
     def set_listening(self, on: bool) -> dict[str, Any]:
         self.listening = on

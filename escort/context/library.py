@@ -8,17 +8,24 @@ from escort.context.chunk import sections_from_markdown
 from escort.context.extract import extract_text
 from escort.context.matcher import match_event
 from escort.context.models import CalendarEvent, ContextItem, MatchProposal
-from escort.context.sources.registry import build_sources
+from escort.context.sources.base import ConnectorError, ConnectorSetupError
+from escort.context.sources.registry import Connectors, build_sources
 from escort.store import MeetingStore, new_id
 
 
 class ContextLibrary:
-    def __init__(self, root: Path, secrets_get: Callable[[str], str | None]) -> None:
+    def __init__(
+        self,
+        root: Path,
+        secrets_get: Callable[[str], str | None],
+        connectors: Connectors | None = None,
+    ) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "context.json"
         self.secrets_get = secrets_get
-        self.sources = build_sources(secrets_get)
+        self.connectors = connectors or Connectors.from_getter(secrets_get)
+        self.sources = build_sources(self.connectors)
         self._load()
 
     def _load(self) -> None:
@@ -84,7 +91,7 @@ class ContextLibrary:
         self._save()
 
     def import_external(self, source_name: str, external_id: str) -> ContextItem:
-        source = self.sources[source_name]
+        source = self._source(source_name)
         item = source.fetch(external_id)
         return self.add_item(item)
 
@@ -96,16 +103,25 @@ class ContextLibrary:
                     "name": name,
                     "label": source.label,
                     "connected": source.connected(),
-                    "mode": "mock" if not source.connected() else "live",
+                    "mode": source.mode(),
                 }
             )
         return rows
 
+    def _source(self, source_name: str):
+        source = self.sources.get(source_name)
+        if source is None:
+            raise ConnectorSetupError(source_name or "unknown", f"Unknown connector: {source_name!r}")
+        return source
+
     def search_connector(self, source_name: str, query: str) -> list[dict]:
-        return self.sources[source_name].search(query)
+        return self._source(source_name).search(query)
 
     def upcoming_events(self, limit: int = 5) -> list[CalendarEvent]:
-        return self.sources["google_calendar"].list_upcoming_events(limit)
+        try:
+            return self.sources["google_calendar"].list_upcoming_events(limit)
+        except ConnectorError:
+            return []
 
     def propose_matches(self, event_id: str) -> tuple[CalendarEvent | None, list[MatchProposal]]:
         event = next((item for item in self.upcoming_events(10) if item.id == event_id), None)

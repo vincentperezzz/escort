@@ -24,6 +24,7 @@ class ContextItem:
     sections: list[ContextSection] = field(default_factory=list)
     enabled: bool = True
     external_id: str | None = None
+    mock: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -49,6 +50,7 @@ class ContextItem:
             sections=sections,
             enabled=bool(raw.get("enabled", True)),
             external_id=raw.get("external_id"),
+            mock=bool(raw.get("mock", False)),
         )
 
 
@@ -61,6 +63,7 @@ class CalendarEvent:
     description: str = ""
     attendees: list[str] = field(default_factory=list)
     linked_doc_hints: list[str] = field(default_factory=list)
+    mock: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

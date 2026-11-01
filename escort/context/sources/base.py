@@ -5,6 +5,28 @@ from typing import Protocol
 from escort.context.models import CalendarEvent, ContextItem
 
 
+class ConnectorError(RuntimeError):
+    """A connector call failed (network, upstream error, unsupported item)."""
+
+    status_code = 502
+
+    def __init__(self, provider: str, message: str) -> None:
+        super().__init__(message)
+        self.provider = provider
+
+
+class ConnectorAuthError(ConnectorError):
+    """The stored credential is missing, expired beyond refresh, or revoked."""
+
+    status_code = 401
+
+
+class ConnectorSetupError(ConnectorError):
+    """The user must fix configuration or input (missing client ID, bad pasted token)."""
+
+    status_code = 400
+
+
 class ContextSource(Protocol):
     name: str
     label: str

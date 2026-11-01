@@ -21,6 +21,7 @@ def mock_calendar() -> list[CalendarEvent]:
             description="Walk through merchant console, KYC, and whether payment integration stays Phase 2.",
             attendees=["boss@example.com", "client@bayanipay.demo"],
             linked_doc_hints=["SOW", "bayanipay", "Phase 2"],
+            mock=True,
         ),
         CalendarEvent(
             id="evt_weekly_sync",
@@ -30,6 +31,7 @@ def mock_calendar() -> list[CalendarEvent]:
             description="Standup only.",
             attendees=["boss@example.com"],
             linked_doc_hints=[],
+            mock=True,
         ),
     ]
 
@@ -41,19 +43,21 @@ def mock_notion_hits() -> list[dict]:
             "id": "notion_phase_scope",
             "title": "Phase scope — BayaniPay launch",
             "snippet": "Phase 2 covers card checkout and InstaPay cash-in.",
+            "mock": True,
         },
         {
             "id": "notion_pricing",
             "title": "Pricing guardrails",
             "snippet": "Processing fee stays 2.4% until finance signs off.",
+            "mock": True,
         },
     ]
 
 
 def mock_drive_hits() -> list[dict]:
     return [
-        {"id": "drive_sow", "title": "BayaniPay SOW (fictional).pdf", "snippet": "Payment integration is explicitly Phase 2."},
-        {"id": "drive_kyc", "title": "KYC checklist.docx", "snippet": "Identity check stays in Phase 1 onboarding."},
+        {"id": "drive_sow", "title": "BayaniPay SOW (fictional).pdf", "snippet": "Payment integration is explicitly Phase 2.", "mock": True},
+        {"id": "drive_kyc", "title": "KYC checklist.docx", "snippet": "Identity check stays in Phase 1 onboarding.", "mock": True},
     ]
 
 
@@ -81,4 +85,5 @@ def mock_import_item(source_kind: str, external_id: str) -> ContextItem:
         sections=sections_from_markdown(text if "sow" in external_id or "scope" in external_id else text[:1200]),
         enabled=True,
         external_id=external_id,
+        mock=True,
     )
