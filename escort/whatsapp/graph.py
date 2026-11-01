@@ -37,26 +37,43 @@ class GraphClient:
             }
         )
 
-    def send_buttons(self, to: str, body: str, buttons: list[tuple[str, str]]) -> dict:
+    def send_buttons(
+        self,
+        to: str,
+        body: str,
+        buttons: list[tuple[str, str]],
+        header_media_id: str | None = None,
+    ) -> dict:
+        interactive: dict = {
+            "type": "button",
+            "body": {"text": body[:1024]},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": button_id[:256], "title": title[:20]}}
+                    for button_id, title in buttons[:3]
+                ]
+            },
+        }
+        if header_media_id:
+            interactive["header"] = {"type": "image", "image": {"id": header_media_id}}
         return self.send(
             {
                 "messaging_product": "whatsapp",
                 "to": to,
                 "type": "interactive",
-                "interactive": {
-                    "type": "button",
-                    "body": {"text": body[:1024]},
-                    "action": {
-                        "buttons": [
-                            {"type": "reply", "reply": {"id": button_id[:256], "title": title[:20]}}
-                            for button_id, title in buttons[:3]
-                        ]
-                    },
-                },
+                "interactive": interactive,
             }
         )
 
-    def send_list(self, to: str, body: str, rows: list[dict[str, str]]) -> dict:
+    def send_list(
+        self,
+        to: str,
+        body: str,
+        rows: list[dict[str, str]],
+        *,
+        button: str = "Open items",
+        section: str = "Commitments",
+    ) -> dict:
         return self.send(
             {
                 "messaging_product": "whatsapp",
@@ -66,10 +83,10 @@ class GraphClient:
                     "type": "list",
                     "body": {"text": body[:1024]},
                     "action": {
-                        "button": "Replies",
+                        "button": button[:20],
                         "sections": [
                             {
-                                "title": "Say this",
+                                "title": section[:24],
                                 "rows": [
                                     {
                                         "id": row["id"][:200],

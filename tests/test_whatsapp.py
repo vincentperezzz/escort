@@ -129,15 +129,20 @@ def test_cards_queue_outside_the_window_then_push_with_buttons(tmp_path: Path):
     assert sent == []
     service.handle_payload(text_payload(DEMO_NUMBER, "start meeting"))
     kinds = [item.get("type") for item in sent]
-    assert "image" in kinds
     assert "interactive" in kinds
     buttons = [item for item in sent if item.get("interactive", {}).get("type") == "button"]
     lists = [item for item in sent if item.get("interactive", {}).get("type") == "list"]
     assert buttons
     titles = [button["reply"]["title"] for button in buttons[0]["interactive"]["action"]["buttons"]]
-    assert titles == ["Push back", "Note it", "Ignore"]
+    assert titles == ["Raise it", "Suggest reply", "Ignore"]
+    assert buttons[0]["interactive"]["header"]["type"] == "image"
     assert lists
-    assert len(lists[0]["interactive"]["action"]["sections"][0]["rows"]) == 2
+    assert lists[0]["interactive"]["action"]["sections"][0]["title"] == "Commitments"
+    conflict = next(item for item in service.timings if item["kind"] == "PRD_CONFLICT")
+    assert {"webhook_ms", "muse_ms", "graph_ms", "e2e_ms", "within_target"} <= set(conflict)
+    assert conflict["e2e_ms"] <= 5000
+    assert conflict["muse_ms"] == 3.1
+    assert conflict["graph_ms"] > 0
     assert sent[0]["to"] == DEMO_NUMBER
     assert "graph.facebook.com/v22.0/PHONE_ID/messages" in service.graph.root + "/PHONE_ID/messages"
 
@@ -164,11 +169,14 @@ def test_note_it_adds_a_commitment_and_document_sets_prd(tmp_path: Path):
     assert service.sessions[DEMO_NUMBER].prd_text.startswith("# Scope")
     assert service.store.prd_sections
     service.fanout(sample_cards())
-    service.handle_payload(action_payload(DEMO_NUMBER, "note|card_conflict", "Note it"))
+    service.handle_payload(action_payload(DEMO_NUMBER, "raise|card_conflict", "Raise it"))
     commitments = service.store.meeting()["commitments"]
     assert commitments
     assert commitments[-1]["who"] == "Me"
     assert commitments[-1]["when"] == "this meeting"
+    service.handle_payload(action_payload(DEMO_NUMBER, "suggest|card_conflict", "Suggest reply"))
+    assert any(item.get("text", {}).get("body", "").startswith("Say this:") for item in sent)
+    assert any(item["kind"] == "suggest" and item["e2e_ms"] <= 5000 for item in service.timings)
     service.handle_payload(text_payload(DEMO_NUMBER, "end meeting"))
     ending = [item["text"]["body"] for item in sent if item.get("type") == "text"][-1]
     assert "Commitments" in ending

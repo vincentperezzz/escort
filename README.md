@@ -4,7 +4,9 @@
 
 The state is the product: PRD sections, Me and Them turns, commitments (who, what, when), open items, and the last frame that actually changed. A conflict card is pushed onto the panel on its own, while the line is still going or in the instant after it ends. It cites the PRD section and carries a crop of the screen region as evidence. You do not query for it.
 
-For the hackathon the brain that writes the cards is Muse Spark. Any other MCP client can sit in the same chair. Boss's phone-side chat is WhatsApp, through Meta's WhatsApp Cloud API. It is not Messenger, and it does not use a Facebook Page. The PRD markdown is passed in full with the turn. There is no vector index.
+For the hackathon the brain that writes the cards is Muse Spark. Any other MCP client can sit in the same chair. Boss's phone-side chat is WhatsApp, through Meta's WhatsApp Cloud API. It is not Messenger, and it does not use a Facebook Page. No bot joins the call. The PRD markdown is passed in full with the turn. There is no vector index.
+
+Judge line: Screenpipe remembers everything. Escort taps you on WhatsApp at the moment you're about to agree to something that breaks your PRD.
 
 ## Consent and retention
 
@@ -174,7 +176,11 @@ The clip is `fixtures/eval/taglish.wav`. The reference is `fixtures/eval/referen
 
 Boss's phone chat is the WhatsApp Cloud API. Not Messenger. Not a Facebook Page. The Graph host is still `graph.facebook.com`. That is the documented WhatsApp Cloud API host.
 
-`start meeting` is the text that opens the session. It also opens WhatsApp's 24-hour customer-service window, counted from that inbound message. Inside the window, Escort can push `PRD_CONFLICT`, `COMMITMENT`, and `SUGGESTED_REPLY` cards. A conflict or commitment arrives with up to three reply buttons: Push back, Note it, Ignore. Suggested replies arrive as a list. A screen crop is attached as an image when the file is still on disk. Note it writes a commitment. Outside the window, cards are queued. The next message you send is what tells you to text `start meeting`.
+`start meeting` is step one on camera. That text opens the session and WhatsApp's 24-hour customer-service window, counted from the inbound message. Then drop the PRD in the chat as a document. The sample PRD in this repo is fictional. BayaniPay is not a real company.
+
+Inside the window, a PRD conflict arrives as one interactive message with exactly three buttons: Raise it, Suggest reply, and Ignore. When a SAM or screen crop exists, that image is the message header. Tap Suggest reply and a Taglish line comes back. Commitments arrive as an interactive list of open items. Outside the window, cards wait, and the next inbound text tells Boss to send `start meeting`.
+
+Each push logs a timing breakdown to the console: `webhook_ms` for the handler, `muse_ms` for model time from the end of the turn, and `graph_ms` for the Graph API send. `e2e_ms` is those three added together. The conflict push target is under about 5 seconds to the phone, not just model time.
 
 ```bash
 python -m escort whatsapp --port 8748
@@ -185,9 +191,11 @@ python -m escort whatsapp --demo
 
 ### Setup
 
+This test-number and allowlist setup is a hackathon demo. It is not production-ready. The free test number only delivers to numbers you add by hand.
+
 1. Create a Meta developer app and add the WhatsApp product. Do not add Messenger. Do not create a Facebook Page for this.
 2. In WhatsApp, API setup, use the free test business number.
-3. Add up to five recipient numbers. One of them is Boss's phone. Those numbers go in `WHATSAPP_ALLOWED_NUMBERS`.
+3. Add up to five recipient numbers for the demo. One of them is Boss's phone. Those numbers go in `WHATSAPP_ALLOWED_NUMBERS`.
 4. Run the webhook on port 8748 and expose it with a Cloudflare tunnel:
 
 ```bash
@@ -213,7 +221,7 @@ A PDF, Markdown, DOCX, or text file sent in the chat becomes the meeting PRD. Im
 
 ## Staged scenario
 
-Client asks to pull payment integration into Phase 1. The PRD says that work is Phase 2 (section 2.2). The client shares a dashboard and says "yung nasa taas, i-adjust natin" about the 2.4 percent fee. The user says they will check with product, then that they will confirm the fee with finance.
+The staged client is fictional. The PRD is fictional. No real company data is in the repo. The client asks to pull payment integration into Phase 1. The PRD says that work is Phase 2 (section 2.2). The client shares a dashboard and says "yung nasa taas, i-adjust natin" about the 2.4 percent fee. The user says they will check with product, then that they will confirm the fee with finance.
 
 Regenerate the synthesized audio and the fake screens with `python scripts/build_fixtures.py` if you have espeak-ng and ffmpeg. The committed files are enough to run the demo.
 

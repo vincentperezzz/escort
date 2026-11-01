@@ -15,21 +15,27 @@ def card_body(card: dict) -> str:
 def buttons_for(card: dict) -> list[tuple[str, str]]:
     card_id = str(card.get("id") or "card")
     return [
-        (f"push|{card_id}", "Push back"),
-        (f"note|{card_id}", "Note it"),
+        (f"raise|{card_id}", "Raise it"),
+        (f"suggest|{card_id}", "Suggest reply"),
         (f"ignore|{card_id}", "Ignore"),
     ]
 
 
-def list_rows(cards: list[dict]) -> list[dict[str, str]]:
+def commitment_rows(cards: list[dict]) -> list[dict[str, str]]:
     rows = []
     for card in cards:
-        title = (card.get("title") or "Say this")[:24]
+        title = (card.get("title") or "Commitment")[:24]
+        who = card.get("who") or "Me"
+        what = card.get("what") or card.get("body") or ""
+        when = card.get("when") or ""
+        description = f"{who}: {what}"
+        if when:
+            description = f"{description} ({when})"
         rows.append(
             {
-                "id": f"say|{card.get('id') or title}",
+                "id": f"commit|{card.get('id') or title}",
                 "title": title,
-                "description": (card.get("body") or "")[:72],
+                "description": description[:72],
             }
         )
     return rows

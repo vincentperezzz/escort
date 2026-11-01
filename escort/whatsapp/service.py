@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,8 +15,9 @@ from escort.whatsapp.config import WhatsAppConfig, digits
 from escort.whatsapp.extract import extract_text
 from escort.whatsapp.graph import GraphClient
 from escort.whatsapp.inbound import Inbound, parse_messages
-from escort.whatsapp.render import buttons_for, card_body, crop_file, list_rows
+from escort.whatsapp.render import buttons_for, card_body, commitment_rows, crop_file
 from escort.whatsapp.signature import signature_ok
+from escort.whatsapp.timing import breakdown
 
 WINDOW = timedelta(hours=24)
 
@@ -47,6 +49,7 @@ class WhatsAppService:
         self.model_http = model_http
         self.state_http = state_http or httpx.Client(timeout=5)
         self.sessions: dict[str, PhoneSession] = {}
+        self.timings: list[dict] = []
 
     def verify(self, mode: str | None, token: str | None, challenge: str | None) -> str | None:
         if mode == "subscribe" and token and token == self.config.verify_token and challenge is not None:
@@ -151,26 +154,43 @@ class WhatsAppService:
                 "That message is what opens the 24-hour window I need to text you cards.",
             )
             return
+        started = time.perf_counter()
+        muse_started = time.perf_counter()
         answer = ask_meeting(self.config, text, self._context(session), self.model_http)
-        self.graph.send_text(session.number, answer)
+        muse_ms = (time.perf_counter() - muse_started) * 1000
+        _sent, graph_ms = self._timed(lambda: self.graph.send_text(session.number, answer))
+        self._record("question", "question", started, muse_ms=muse_ms, graph_ms=graph_ms, muse_inside=True)
 
     def _action(self, session: PhoneSession, action_id: str, title: str) -> None:
         kind, _, card_id = action_id.partition("|")
         card = session.known.get(card_id, {})
-        if kind == "note":
-            self._add_commitment(card, title or "Noted from WhatsApp")
-            self.graph.send_text(session.number, f"Noted. I'll keep that as a commitment: {card.get('title') or title}.")
+        started = time.perf_counter()
+        if kind == "raise":
+            self._add_commitment(card, title or "Raise it")
+            reply = f"Raised. Bring this up before you agree: {card.get('title') or title}."
+            _text, graph_ms = self._timed(lambda: self.graph.send_text(session.number, reply))
+            self._record(card_id or "raise", "raise", started, muse_ms=0, graph_ms=graph_ms, muse_inside=False)
             return
         if kind == "ignore":
             session.notes.append(f"Ignored {card.get('title') or card_id}")
-            self.graph.send_text(session.number, "Ignored. I won't bring that one back.")
+            _text, graph_ms = self._timed(
+                lambda: self.graph.send_text(session.number, "Ignored. I won't bring that one back.")
+            )
+            self._record(card_id or "ignore", "ignore", started, muse_ms=0, graph_ms=graph_ms, muse_inside=False)
             return
-        if kind == "push":
-            session.notes.append(f"Push back on {card.get('title') or card_id}")
-            line = card.get("body") or "Sige, hindi pa natin i-commit yan."
-            self.graph.send_text(session.number, f"Push back. Say this: {line}")
+        if kind == "suggest":
+            line, muse_ms, muse_inside = self._suggest_line(session, card)
+            _text, graph_ms = self._timed(lambda: self.graph.send_text(session.number, f"Say this: {line}"))
+            self._record(
+                card_id or "suggest",
+                "suggest",
+                started,
+                muse_ms=muse_ms,
+                graph_ms=graph_ms,
+                muse_inside=muse_inside,
+            )
             return
-        if kind == "say":
+        if kind in {"say", "commit"}:
             session.notes.append(f"Will say: {title or card.get('body') or card_id}")
             self.graph.send_text(session.number, f"Locked. Say: {title or card.get('body') or 'that line'}.")
             return
@@ -229,33 +249,113 @@ class WhatsAppService:
         self._deliver(session, waiting)
 
     def _deliver(self, session: PhoneSession, cards: list[dict]) -> None:
-        replies = [card for card in cards if card.get("type") == "SUGGESTED_REPLY"]
-        others = [card for card in cards if card.get("type") != "SUGGESTED_REPLY"]
-        for card in others:
-            card_id = str(card.get("id"))
-            if card_id in session.sent:
-                continue
-            session.known[card_id] = card
-            image = crop_file(card, self.store.media_dir)
-            if image is not None:
-                media_id = self.graph.upload_media(image)
-                self.graph.send_image(session.number, media_id, card.get("title") or "Screen crop")
-            self.graph.send_buttons(session.number, card_body(card), buttons_for(card))
-            session.sent.add(card_id)
+        conflicts = [card for card in cards if card.get("type") == "PRD_CONFLICT"]
+        commitments = [card for card in cards if card.get("type") == "COMMITMENT"]
+        for card in cards:
+            if card.get("type") == "SUGGESTED_REPLY" and card.get("id"):
+                session.known[str(card["id"])] = card
+        for card in conflicts:
+            self._deliver_conflict(session, card)
         pending = []
-        for card in replies:
-            card_id = str(card.get("id"))
-            if card_id in session.sent:
+        for card in commitments:
+            card_id = str(card.get("id") or "")
+            if not card_id or card_id in session.sent:
                 continue
             session.known[card_id] = card
             pending.append(card)
             session.sent.add(card_id)
         if pending:
-            self.graph.send_list(
-                session.number,
-                "Lines you can say. Pick one.",
-                list_rows(pending),
+            started = time.perf_counter()
+            _sent, graph_ms = self._timed(
+                lambda: self.graph.send_list(
+                    session.number,
+                    "Commitments from this call.",
+                    commitment_rows(pending),
+                )
             )
+            muse_ms = max(float(card.get("latency_ms") or 0) for card in pending)
+            self._record("commitments", "COMMITMENT", started, muse_ms=muse_ms, graph_ms=graph_ms, muse_inside=False)
+
+    def _deliver_conflict(self, session: PhoneSession, card: dict) -> None:
+        card_id = str(card.get("id") or "")
+        if not card_id or card_id in session.sent:
+            return
+        started = time.perf_counter()
+        session.known[card_id] = card
+        graph_ms = 0.0
+        header = None
+        image = crop_file(card, self.store.media_dir)
+        if image is not None:
+            media_id, upload_ms = self._timed(lambda: self.graph.upload_media(image))
+            graph_ms += upload_ms
+            header = media_id
+        _sent, send_ms = self._timed(
+            lambda: self.graph.send_buttons(
+                session.number,
+                card_body(card),
+                buttons_for(card),
+                header_media_id=header,
+            )
+        )
+        graph_ms += send_ms
+        session.sent.add(card_id)
+        self._record(
+            card_id,
+            "PRD_CONFLICT",
+            started,
+            muse_ms=float(card.get("latency_ms") or 0),
+            graph_ms=graph_ms,
+            muse_inside=False,
+        )
+
+    def _suggest_line(self, session: PhoneSession, card: dict) -> tuple[str, float, bool]:
+        section = card.get("prd_section")
+        match = None
+        for known in session.known.values():
+            if known.get("type") != "SUGGESTED_REPLY":
+                continue
+            if section and known.get("prd_section") not in {None, section}:
+                continue
+            match = known
+            break
+        if match and match.get("body"):
+            return str(match["body"]), float(match.get("latency_ms") or 0), False
+        started = time.perf_counter()
+        line = ask_meeting(
+            self.config,
+            "Give Boss one natural Taglish sentence to say out loud about this PRD conflict. No bullets.",
+            card_body(card),
+            self.model_http,
+        )
+        return line, (time.perf_counter() - started) * 1000, True
+
+    def _timed(self, fn):
+        started = time.perf_counter()
+        result = fn()
+        return result, (time.perf_counter() - started) * 1000
+
+    def _record(
+        self,
+        card_id: str,
+        kind: str,
+        started: float,
+        *,
+        muse_ms: float,
+        graph_ms: float,
+        muse_inside: bool,
+    ) -> None:
+        elapsed = (time.perf_counter() - started) * 1000
+        spent = graph_ms + (muse_ms if muse_inside else 0)
+        webhook_ms = max(0.0, elapsed - spent)
+        self.timings.append(
+            breakdown(
+                card_id=card_id,
+                kind=kind,
+                webhook_ms=webhook_ms,
+                muse_ms=muse_ms,
+                graph_ms=graph_ms,
+            )
+        )
 
     def _window_open(self, session: PhoneSession) -> bool:
         return bool(session.window_until and session.window_until > datetime.now(timezone.utc))

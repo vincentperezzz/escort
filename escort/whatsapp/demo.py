@@ -41,7 +41,7 @@ def scripted_payloads() -> list[dict]:
         document_payload(DEMO_NUMBER, "prd-1"),
         text_payload(DEMO_NUMBER, "Is payment integration in Phase 1?"),
         text_payload("19998887777", "start meeting"),
-        action_payload(DEMO_NUMBER, "note|card_conflict", "Note it"),
+        action_payload(DEMO_NUMBER, "suggest|card_conflict", "Suggest reply"),
         text_payload(DEMO_NUMBER, "end meeting"),
     ]
 
@@ -144,6 +144,16 @@ def sample_cards() -> list[dict]:
             "prd_section": "3. Pricing",
             "latency_ms": 3.4,
         },
+        {
+            "id": "card_commit",
+            "type": "COMMITMENT",
+            "title": "Demo by Friday",
+            "body": "You just promised the demo by Friday.",
+            "who": "Me",
+            "what": "show the demo by Friday",
+            "when": "Friday",
+            "latency_ms": 4.0,
+        },
     ]
 
 
@@ -172,7 +182,7 @@ def print_demo(media_dir: Path) -> list[dict]:
     service.handle_payload(text_payload(DEMO_NUMBER, "start meeting"))
     service.handle_payload(document_payload(DEMO_NUMBER, "prd-1"))
     service.fanout(sample_cards())
-    service.handle_payload(action_payload(DEMO_NUMBER, "note|card_conflict", "Note it"))
+    service.handle_payload(action_payload(DEMO_NUMBER, "suggest|card_conflict", "Suggest reply"))
     service.handle_payload(text_payload("19998887777", "start meeting"))
     service.handle_payload(text_payload(DEMO_NUMBER, "end meeting"))
     for item in sent:
