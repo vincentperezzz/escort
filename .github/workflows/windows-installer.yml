@@ -30,7 +30,7 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Compile EscortSetup.exe
-        run: "& '${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe' packaging\escort.iss"
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\escort.iss'
       - name: Upload CI artifact
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
