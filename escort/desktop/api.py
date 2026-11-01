@@ -49,6 +49,18 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     def listen(body: dict) -> dict:
         return runtime.set_listening(bool(body.get("on")))
 
+    @app.get("/api/overlay")
+    def overlay() -> dict:
+        return runtime.overlay_status()
+
+    @app.post("/api/overlay")
+    def set_overlay(body: dict) -> dict:
+        hide, visible = body.get("hide_from_share"), body.get("visible")
+        return runtime.set_overlay(
+            hide_from_share=None if hide is None else bool(hide),
+            visible=None if visible is None else bool(visible),
+        )
+
     @app.post("/api/cards/{card_id}/action")
     def action(card_id: str, body: dict) -> dict:
         return runtime.act(card_id, str(body.get("action") or ""))

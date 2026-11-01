@@ -1,5 +1,5 @@
 #define AppName "Escort"
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 #define AppPublisher "Escort"
 #define DistDir "..\dist\Escort"
 
@@ -17,6 +17,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
+SetupIconFile=escort.ico
 UninstallDisplayIcon={app}\Escort.exe
 SetupLogging=yes
 

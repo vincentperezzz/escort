@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import threading
 from pathlib import Path
@@ -8,10 +9,14 @@ from pathlib import Path
 import uvicorn
 
 from escort.desktop.api import create_desktop_app
+from escort.desktop.hotkey import GlobalHotkey
+from escort.desktop.overlay import create_overlay
 from escort.desktop.runtime import DesktopRuntime
 from escort.paths import repo_root
 from escort.server import AppState, create_server
 from escort.store import MeetingStore
+
+log = logging.getLogger("escort.desktop")
 
 
 def ui_dist() -> Path | None:
@@ -83,34 +88,84 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
         threading.Event().wait()
         return
     window = webview.create_window("Escort", url, width=1120, height=780, background_color="#efe6d6")
-    _tray(runtime, window)
-    webview.start()
+    overlay = create_overlay(webview, url)
+    runtime.attach_overlay(overlay)
+    if overlay is not None:
+        # pywebview only exits once every window is gone; the overlay must not keep it alive.
+        window.events.closed += overlay.destroy
+    icon = _tray(runtime, window)
+    hotkey = _hotkey(runtime)
+    try:
+        webview.start()
+    finally:
+        if hotkey is not None:
+            hotkey.stop()
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
 
 
-def _tray(runtime: DesktopRuntime, window) -> None:
+def _hotkey(runtime: DesktopRuntime) -> GlobalHotkey | None:
+    """Ctrl+Shift+E toggles the overlay. Never raises; None if unavailable."""
+    try:
+        hotkey = GlobalHotkey(runtime.toggle_overlay)
+        return hotkey if hotkey.start() else None
+    except Exception as exc:
+        log.warning("Overlay hotkey unavailable: %s", exc)
+        return None
+
+
+def _tray(runtime: DesktopRuntime, window):
+    """Start the tray icon. Never raises; returns the pystray icon or None."""
     try:
         import pystray
-        from PIL import Image, ImageDraw
-    except Exception:
-        return
-    image = Image.new("RGB", (64, 64), "#1a140f")
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((8, 8, 56, 56), fill="#c47b12")
 
-    def toggle(_icon, _item) -> None:
-        runtime.set_listening(not runtime.listening)
+        from escort.desktop.logo import render_logo
 
-    def show(_icon, _item) -> None:
-        window.show()
+        images = {live: render_logo(64, live=live) for live in (False, True)}
 
-    def quit_app(icon, _item) -> None:
-        icon.stop()
-        window.destroy()
+        def toggle(_icon, _item) -> None:
+            runtime.set_listening(not runtime.listening)
 
-    menu = pystray.Menu(
-        pystray.MenuItem("Show Escort", show),
-        pystray.MenuItem("Start or stop listening", toggle),
-        pystray.MenuItem("Quit", quit_app),
-    )
-    icon = pystray.Icon("escort", image, "Escort", menu)
-    threading.Thread(target=icon.run, daemon=True).start()
+        def show(_icon, _item) -> None:
+            window.show()
+
+        def toggle_overlay(_icon, _item) -> None:
+            runtime.toggle_overlay()
+
+        def toggle_share(_icon, _item) -> None:
+            runtime.set_overlay(hide_from_share=not runtime.hide_from_share)
+
+        def quit_app(icon, _item) -> None:
+            icon.stop()
+            window.destroy()
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Show Escort", show, default=True),
+            pystray.MenuItem("Start or stop listening", toggle),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Show/Hide overlay", toggle_overlay, checked=lambda _item: runtime.overlay_visible),
+            pystray.MenuItem(
+                "Hide from screen share",
+                toggle_share,
+                checked=lambda _item: runtime.hide_from_share,
+                enabled=lambda _item: runtime.overlay_supported(),
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Quit", quit_app),
+        )
+        icon = pystray.Icon("escort", images[runtime.listening], "Escort", menu)
+
+        def refresh() -> None:
+            icon.icon = images[runtime.listening]
+            icon.title = "Escort - listening" if runtime.listening else "Escort"
+            icon.update_menu()
+
+        runtime.subscribe(refresh)
+        threading.Thread(target=icon.run, name="escort-tray", daemon=True).start()
+        return icon
+    except Exception as exc:
+        log.warning("Tray icon unavailable: %s", exc)
+        return None

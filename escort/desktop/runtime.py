@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from escort.context.library import ContextLibrary
 from escort.context.mock_data import mock_import_item
@@ -16,6 +17,11 @@ from escort.paths import repo_root
 from escort.replay import build_pipeline, load_scenario, run_replay
 from escort.settings import load_settings
 from escort.store import MeetingStore
+
+if TYPE_CHECKING:
+    from escort.desktop.overlay import OverlayController
+
+log = logging.getLogger("escort.desktop")
 
 KEY_NAMES = (
     "meta_api_key",
@@ -54,6 +60,9 @@ class DesktopRuntime:
         self.listening = False
         self._lock = threading.RLock()
         self.prefs = self._read_prefs()
+        self.overlay: OverlayController | None = None
+        self.overlay_visible = False
+        self._observers: list[Callable[[], None]] = []
         self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
         self.context = ContextLibrary(store.media_dir.parent, self.secrets.get, connectors=self.connectors)
 
@@ -94,7 +103,8 @@ class DesktopRuntime:
             "meeting": snapshot,
             "context": self.context.public_view(),
             "connectors": self.connectors.status(),
-            "mcp": "http://127.0.0.1:8747/mcp",
+            "overlay": self.overlay_status(),
+            "mcp":"http://127.0.0.1:8747/mcp",
             "whatsapp": "http://127.0.0.1:8748/webhook",
         }
 
@@ -198,13 +208,84 @@ class DesktopRuntime:
             self.store.mode = "live"
         if not on and self.store.mode == "live":
             self.store.mode = "idle"
+        self._set_overlay_visible(on)
+        self._notify()
         return self.public_status()
 
     def delete_meeting(self) -> dict[str, Any]:
         self.listening = False
         self.store.delete_meeting()
         self.context.clear()
+        self._set_overlay_visible(False)
+        self._notify()
         return self.public_status()
+
+    # --- overlay -------------------------------------------------------------
+
+    @property
+    def hide_from_share(self) -> bool:
+        return bool(self.prefs.get("hide_from_share", True))
+
+    def overlay_supported(self) -> bool:
+        if self.overlay is not None:
+            return bool(self.overlay.supported)
+        from escort.desktop.win_overlay import capture_exclusion_supported
+
+        return capture_exclusion_supported()
+
+    def overlay_status(self) -> dict[str, Any]:
+        return {
+            "hide_from_share": self.hide_from_share,
+            "visible": self.overlay_visible,
+            "listening": self.listening,
+            "supported": self.overlay_supported(),
+        }
+
+    def attach_overlay(self, controller: OverlayController | None) -> None:
+        """Bind the overlay window and push the current state to it."""
+        self.overlay = controller
+        if controller is None:
+            return
+        self._call_overlay("set_hide_from_share", self.hide_from_share)
+        self._call_overlay("set_visible", self.overlay_visible)
+
+    def set_overlay(self, hide_from_share: bool | None = None, visible: bool | None = None) -> dict[str, Any]:
+        with self._lock:
+            if hide_from_share is not None and hide_from_share != self.hide_from_share:
+                self.prefs["hide_from_share"] = hide_from_share
+                self._write_prefs()
+            if hide_from_share is not None:
+                self._call_overlay("set_hide_from_share", hide_from_share)
+            if visible is not None:
+                self._set_overlay_visible(visible)
+        self._notify()
+        return self.overlay_status()
+
+    def toggle_overlay(self) -> dict[str, Any]:
+        return self.set_overlay(visible=not self.overlay_visible)
+
+    def subscribe(self, callback: Callable[[], None]) -> None:
+        """Called after listening or overlay state changes (used by the tray)."""
+        self._observers.append(callback)
+
+    def _set_overlay_visible(self, visible: bool) -> None:
+        self.overlay_visible = visible
+        self._call_overlay("set_visible", visible)
+
+    def _call_overlay(self, method: str, value: bool) -> None:
+        if self.overlay is None:
+            return
+        try:
+            getattr(self.overlay, method)(value)
+        except Exception as exc:
+            log.warning("Overlay %s(%s) failed: %s", method, value, exc)
+
+    def _notify(self) -> None:
+        for callback in list(self._observers):
+            try:
+                callback()
+            except Exception as exc:
+                log.warning("State observer failed: %s", exc)
 
     def act(self, card_id: str, action: str) -> dict[str, Any]:
         card = next((item for item in self.store.cards if item.id == card_id), None)

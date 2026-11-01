@@ -58,6 +58,7 @@ exe = EXE(
     exclude_binaries=True,
     name="Escort",
     console=False,
+    icon=str(root / "packaging" / "escort.ico"),
 )
 coll = COLLECT(
     exe,
