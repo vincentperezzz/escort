@@ -36,6 +36,9 @@ BACKGROUND = "#202020"
 DEFAULT_OPACITY = 0.92
 MIN_OPACITY = 0.3
 MAX_OPACITY = 1.0
+# A focus=False arriving this soon after focus=True is the page's own blur/focus
+# churn while Windows hands it activation; acting on it made the ask box flicker.
+FOCUS_RELEASE_DELAY_S = 0.25
 
 
 def clamp_opacity(value: Any) -> float:
@@ -75,6 +78,8 @@ class OverlayWindow:
         self._input_focus = False
         self._previous_foreground: int | None = None
         self._placed = False
+        self._applied_opacity: float | None = None
+        self._release_timer: threading.Timer | None = None
         self._lock = threading.RLock()
 
     # pywebview lifecycle hooks (run on pywebview worker threads)
@@ -101,8 +106,10 @@ class OverlayWindow:
     def set_visible(self, visible: bool) -> None:
         with self._lock:
             self._visible = visible
-            if not visible and self._input_focus:
-                self._release_focus()
+            if not visible:
+                self._cancel_release()
+                if self._input_focus:
+                    self._release_focus()
             self._apply_visibility()
 
     def set_hide_from_share(self, hide: bool) -> None:
@@ -118,14 +125,38 @@ class OverlayWindow:
     def set_opacity(self, opacity: float) -> None:
         with self._lock:
             self._opacity = clamp_opacity(opacity)
+            if self._opacity == self._applied_opacity:
+                return  # slider sweeps repeat values; each apply rebuilds the window styles
             self._apply_opacity()
 
     def set_input_focus(self, focus: bool) -> None:
-        """True lets the overlay take keystrokes (clears NOACTIVATE); False hands focus back."""
+        """True lets the overlay take keystrokes (clears NOACTIVATE); False hands focus back.
+
+        Idempotent, and a release is delayed by FOCUS_RELEASE_DELAY_S so a
+        blur/focus pair from the page while it is being activated is a no-op.
+        """
         with self._lock:
+            self._cancel_release()
             if focus:
-                self._take_focus()
+                if not self._input_focus:
+                    self._take_focus()
             elif self._input_focus:
+                timer = threading.Timer(FOCUS_RELEASE_DELAY_S, self._delayed_release)
+                timer.daemon = True
+                self._release_timer = timer
+                timer.start()
+
+    def _cancel_release(self) -> None:
+        if self._release_timer is not None:
+            self._release_timer.cancel()
+            self._release_timer = None
+
+    def _delayed_release(self) -> None:
+        with self._lock:
+            if self._release_timer is None or threading.current_thread() is not self._release_timer:
+                return  # cancelled or superseded meanwhile
+            self._release_timer = None
+            if self._input_focus:
                 self._release_focus()
 
     def _set_pywebview_focus_flag(self, focus: bool) -> None:
@@ -215,6 +246,7 @@ class OverlayWindow:
             return
         hwnd = self.hwnd
         opacity = self._opacity
+        self._applied_opacity = opacity
 
         def apply() -> None:
             native.Opacity = opacity
@@ -288,23 +320,39 @@ class OverlayWindow:
             log.warning("Overlay show/hide failed: %s", exc)
 
     def _on_gui(self, fn: Callable[[], Any]) -> None:
-        """Run fn on the window's UI thread (some Win32 calls require the owner thread)."""
-        native = getattr(self.window, "native", None)
-        try:
-            if native is not None and getattr(native, "InvokeRequired", False):
-                from System import Func, Type  # type: ignore[import-not-found]
+        """Run fn on the window's UI thread (WinForms and some Win32 calls require the owner thread).
 
-                def call():
-                    fn()
+        Skipped when the Form is gone or its HWND was destroyed: touching a
+        disposed Form or a dead handle from another thread is undefined.
+        """
+        native = getattr(self.window, "native", None)
+        hwnd = self.hwnd
+
+        def call() -> None:
+            if hwnd and win_overlay.is_windows() and not win_overlay.is_window(hwnd):
+                log.debug("Overlay window handle is gone; skipping")
+                return
+            try:
+                fn()
+            except Exception as exc:
+                log.warning("Overlay call failed: %s", exc)
+
+        if native is None:
+            call()
+            return
+        try:
+            if bool(getattr(native, "IsDisposed", False)) or not bool(getattr(native, "IsHandleCreated", True)):
+                log.debug("Overlay Form not ready or disposed; skipping")
+                return
+            if getattr(native, "InvokeRequired", False):
+                from System import Func, Type  # type: ignore[import-not-found]
 
                 native.Invoke(Func[Type](call))
                 return
         except Exception as exc:
-            log.warning("Overlay UI-thread dispatch failed, calling directly: %s", exc)
-        try:
-            fn()
-        except Exception as exc:
-            log.warning("Overlay call failed: %s", exc)
+            log.warning("Overlay UI-thread dispatch failed: %s", exc)
+            return
+        call()
 
 
 def _move_webview_focus(browser: Any) -> None:
@@ -341,7 +389,11 @@ def create_overlay(webview: Any, url: str) -> OverlayWindow | None:
             x=x,
             y=y,
             frameless=True,
-            easy_drag=True,
+            # easy_drag=True drags the window from a mousedown *anywhere* (pywebview's
+            # customize.js listens on window), so dragging the opacity slider or
+            # selecting text in the ask box moved the whole overlay instead. Only the
+            # .pywebview-drag-region elements (pill, panel header) drag it now.
+            easy_drag=False,
             resizable=False,
             on_top=True,
             # transparent=True is kept for pywebview's WinForms show path: without it the

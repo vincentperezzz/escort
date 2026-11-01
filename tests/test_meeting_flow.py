@@ -18,6 +18,7 @@ from PIL import Image
 from escort import live
 from escort.capture.windows_audio import CaptureUnavailable, choose_loopback_device, choose_mic_device, parse_device_id
 from escort.desktop import live_capture, win_overlay
+from escort.desktop import overlay as overlay_mod
 from escort.desktop.api import create_desktop_app
 from escort.desktop.overlay import COLLAPSED_HEIGHT, HEIGHT, WIDTH, OverlayWindow, clamp_opacity
 from escort.desktop.runtime import DesktopRuntime
@@ -388,7 +389,8 @@ def test_overlay_window_without_handle_uses_pywebview_resize(monkeypatch):
 def test_input_focus_toggles_noactivate_and_returns_focus(monkeypatch):
     events: list[tuple] = []
     monkeypatch.setattr(win_overlay, "foreground_window", lambda: 999)
-    monkeypatch.setattr(win_overlay, "is_window", lambda hwnd: hwnd == 999)
+    monkeypatch.setattr(win_overlay, "is_window", lambda hwnd: hwnd in (999, 1234))
+    monkeypatch.setattr(overlay_mod, "FOCUS_RELEASE_DELAY_S", 0.01)
     monkeypatch.setattr(win_overlay, "make_tool_window", lambda hwnd, no_activate=True: events.append(("style", hwnd, no_activate)))
     monkeypatch.setattr(win_overlay, "focus_window", lambda hwnd: events.append(("focus", hwnd)) or True)
     monkeypatch.setattr(win_overlay, "show_no_activate", lambda *a, **k: True)
@@ -405,12 +407,153 @@ def test_input_focus_toggles_noactivate_and_returns_focus(monkeypatch):
 
     events.clear()
     controller.set_input_focus(False)
+    _wait_release(controller)
     assert events == [("style", 1234, True), ("focus", 999)]
 
     events.clear()
     controller.set_input_focus(True)
     controller.set_visible(False)  # hiding releases focus too
     assert ("style", 1234, True) in events and ("focus", 999) in events
+
+
+def _wait_release(controller: OverlayWindow) -> None:
+    timer = controller._release_timer
+    if timer is not None:
+        timer.join(2)
+
+
+def _focus_recorder(monkeypatch) -> list[tuple]:
+    events: list[tuple] = []
+    monkeypatch.setattr(win_overlay, "foreground_window", lambda: 999)
+    monkeypatch.setattr(win_overlay, "is_window", lambda hwnd: True)
+    monkeypatch.setattr(win_overlay, "make_tool_window", lambda hwnd, no_activate=True: events.append(("style", hwnd, no_activate)))
+    monkeypatch.setattr(win_overlay, "focus_window", lambda hwnd: events.append(("focus", hwnd)) or True)
+    return events
+
+
+def test_repeated_input_focus_is_a_no_op(monkeypatch):
+    """Each re-run of take-focus activated the Form again, which made the page blur/refocus: the flicker loop."""
+    events = _focus_recorder(monkeypatch)
+    controller = OverlayWindow(types.SimpleNamespace(native=None))
+    controller.hwnd = 1234
+    controller.set_input_focus(True)
+    events.clear()
+    controller.set_input_focus(True)
+    controller.set_input_focus(True)
+    assert events == []
+
+
+def test_blur_then_focus_churn_never_releases(monkeypatch):
+    events = _focus_recorder(monkeypatch)
+    monkeypatch.setattr(overlay_mod, "FOCUS_RELEASE_DELAY_S", 0.05)
+    controller = OverlayWindow(types.SimpleNamespace(native=None))
+    controller.hwnd = 1234
+    controller.set_input_focus(True)
+    events.clear()
+    controller.set_input_focus(False)
+    controller.set_input_focus(True)  # the page refocused the box before the release fired
+    time.sleep(0.15)
+    assert events == [] and controller._input_focus is True
+
+
+def test_gui_calls_skip_a_destroyed_window(monkeypatch):
+    monkeypatch.setattr(win_overlay, "is_windows", lambda: True)
+    monkeypatch.setattr(win_overlay, "is_window", lambda hwnd: False)
+    resized = []
+    monkeypatch.setattr(win_overlay, "resize", lambda *a: resized.append(a) or True)
+    controller = OverlayWindow(types.SimpleNamespace(native=None))
+    controller.hwnd = 1234
+    controller.set_collapsed(True)
+    assert resized == []
+
+
+def test_gui_calls_skip_a_disposed_or_unbuilt_form(monkeypatch):
+    monkeypatch.setattr(win_overlay, "is_windows", lambda: True)
+    monkeypatch.setattr(win_overlay, "is_window", lambda hwnd: True)
+    for native in (
+        types.SimpleNamespace(Opacity=1.0, InvokeRequired=False, IsDisposed=True, IsHandleCreated=True),
+        types.SimpleNamespace(Opacity=1.0, InvokeRequired=False, IsDisposed=False, IsHandleCreated=False),
+    ):
+        controller = OverlayWindow(types.SimpleNamespace(native=native))
+        controller.hwnd = 1234
+        controller.set_opacity(0.5)
+        assert native.Opacity == 1.0
+
+
+def test_gui_calls_are_marshalled_through_invoke_off_the_ui_thread(monkeypatch):
+    """Off the UI thread every WinForms/HWND call goes through Form.Invoke, never runs on the caller."""
+    import sys as _sys
+
+    monkeypatch.setattr(win_overlay, "is_window", lambda hwnd: True)
+    monkeypatch.setattr(win_overlay, "make_tool_window", lambda *a, **k: True)
+    monkeypatch.setattr(win_overlay, "set_capture_excluded", lambda *a: True)
+    fake_system = types.ModuleType("System")
+
+    class _Generic:
+        def __getitem__(self, _type):
+            return lambda fn: fn
+
+    fake_system.Func = _Generic()
+    fake_system.Type = object
+    monkeypatch.setitem(_sys.modules, "System", fake_system)
+    invoked = []
+
+    class Form:
+        InvokeRequired = True
+        IsDisposed = False
+        IsHandleCreated = True
+        Opacity = 1.0
+
+        def Invoke(self, delegate):
+            invoked.append(threading.current_thread().name)
+            delegate()
+
+    native = Form()
+    controller = OverlayWindow(types.SimpleNamespace(native=native))
+    controller.hwnd = 1234
+    controller.set_opacity(0.6)
+    assert invoked and native.Opacity == 0.6
+
+
+def test_opacity_sweep_skips_repeated_values(fake_windows):
+    sets = []
+
+    class Native:
+        InvokeRequired = False
+
+        @property
+        def Opacity(self):
+            return sets[-1] if sets else 1.0
+
+        @Opacity.setter
+        def Opacity(self, value):
+            sets.append(value)
+
+    controller = OverlayWindow(types.SimpleNamespace(native=Native()))
+    controller.hwnd = 1234
+    for value in (0.5, 0.5, 0.5, 0.6, 0.6, 0.5):
+        controller.set_opacity(value)
+    assert sets == [0.5, 0.6, 0.5]
+
+
+def test_overlay_window_is_created_without_easy_drag():
+    """easy_drag made a mousedown anywhere drag the window, so the opacity slider could not be dragged."""
+    created = {}
+
+    class FakeEvents:
+        def __init__(self):
+            self.before_show = self
+            self.loaded = self
+
+        def __iadd__(self, _handler):
+            return self
+
+    def create_window(*args, **kwargs):
+        created.update(kwargs)
+        return types.SimpleNamespace(events=FakeEvents(), native=None)
+
+    overlay_mod.create_overlay(types.SimpleNamespace(create_window=create_window, screens=[]), "http://x")
+    assert created["easy_drag"] is False and created["frameless"] is True
 
 
 def test_make_tool_window_style_bits(fake_windows):

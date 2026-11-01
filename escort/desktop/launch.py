@@ -8,7 +8,7 @@ from pathlib import Path
 
 import uvicorn
 
-from escort.desktop import win_overlay
+from escort.desktop import crashlog, win_overlay
 from escort.desktop.api import create_desktop_app
 from escort.desktop.hotkey import GlobalHotkey
 from escort.desktop.overlay import create_overlay
@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--web", action="store_true")
     parser.add_argument("--demo", action="store_true")
     args = parser.parse_args(argv)
+    crashlog.install()  # no-op when the frozen entry already did it
     store = MeetingStore(repo_root() / "var" / "desktop")
     runtime = DesktopRuntime(store)
     if args.demo:
@@ -187,10 +188,21 @@ def _tray(runtime: DesktopRuntime, window):
         )
         icon = pystray.Icon("escort", images[runtime.listening], "Escort", menu)
 
+        refresh_lock = threading.Lock()
+        shown: dict[str, bool] = {}
+
         def refresh() -> None:
-            icon.icon = images[runtime.listening]
-            icon.title = "Escort - listening" if runtime.listening else "Escort"
-            icon.update_menu()
+            # Observers fire from many API worker threads at once (e.g. every opacity
+            # step). pystray's setters destroy and replace native icon handles and are
+            # not thread-safe ("Invalid cursor handle" under load), so serialize them
+            # and only touch the icon when listening actually changed.
+            with refresh_lock:
+                listening = bool(runtime.listening)
+                if shown.get("listening") != listening:
+                    icon.icon = images[listening]
+                    icon.title = "Escort - listening" if listening else "Escort"
+                    shown["listening"] = listening
+                icon.update_menu()
 
         runtime.subscribe(refresh)
         threading.Thread(target=icon.run, name="escort-tray", daemon=True).start()

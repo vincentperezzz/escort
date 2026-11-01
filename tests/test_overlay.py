@@ -199,6 +199,54 @@ def test_tray_failure_is_soft(tmp_path: Path, monkeypatch):
     assert launch._tray(_runtime(tmp_path), window=None) is None
 
 
+def test_tray_refresh_is_serialized_and_only_swaps_icon_on_change(tmp_path: Path, monkeypatch):
+    import threading
+    import time
+
+    state = {"inside": 0, "overlaps": 0, "icon_sets": 0}
+
+    class Icon:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.title = ""
+
+        def _critical(self) -> None:
+            state["inside"] += 1
+            if state["inside"] > 1:
+                state["overlaps"] += 1
+            time.sleep(0.001)
+            state["inside"] -= 1
+
+        @property
+        def icon(self):
+            return None
+
+        @icon.setter
+        def icon(self, _value) -> None:
+            state["icon_sets"] += 1
+            self._critical()
+
+        def update_menu(self) -> None:
+            self._critical()
+
+        def run(self) -> None:
+            pass
+
+    fake = types.ModuleType("pystray")
+    fake.Icon = Icon
+    fake.MenuItem = lambda *a, **k: None
+    fake.Menu = type("Menu", (), {"SEPARATOR": None, "__init__": lambda self, *a: None})
+    monkeypatch.setitem(sys.modules, "pystray", fake)
+    runtime = _runtime(tmp_path)
+    assert launch._tray(runtime, window=None) is not None
+    threads = [threading.Thread(target=runtime._notify) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert state["overlaps"] == 0
+    assert state["icon_sets"] == 1, "the icon image is only replaced when listening changes"
+
+
 def test_hotkey_helper_is_soft(tmp_path: Path, monkeypatch):
     def boom(*_args, **_kwargs):
         raise RuntimeError("ctypes missing")

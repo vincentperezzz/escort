@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from escort.audio_util import pcm_to_mono_24k
+from escort.capture.portaudio import LOCK as PORTAUDIO_LOCK
 
 FRAMES = 1024
 
@@ -53,18 +54,20 @@ class WindowsAudioCapture:
                 "pip install 'escort[windows]'"
             ) from exc
         self._pyaudio = pyaudio
-        self._pa = pyaudio.PyAudio()
+        with PORTAUDIO_LOCK:
+            self._pa = pyaudio.PyAudio()
         self._streams: list[tuple[str, object, int, int]] = []
         self._states: dict[str, tuple | None] = {"Me": None, "Them": None}
         self.devices: dict[str, str] = {}
 
     def open(self, mic_index: int | None = None, loopback_index: int | None = None) -> None:
-        host = self._pa.get_host_api_info_by_type(self._pyaudio.paWASAPI)
-        devices = []
-        for index in range(self._pa.get_device_count()):
-            info = dict(self._pa.get_device_info_by_index(index))
-            info["index"] = index
-            devices.append(info)
+        with PORTAUDIO_LOCK:
+            host = self._pa.get_host_api_info_by_type(self._pyaudio.paWASAPI)
+            devices = []
+            for index in range(self._pa.get_device_count()):
+                info = dict(self._pa.get_device_info_by_index(index))
+                info["index"] = index
+                devices.append(info)
         mic = choose_mic_device(devices, int(host["defaultInputDevice"]), mic_index)
         loopback = choose_loopback_device(devices, int(host["defaultOutputDevice"]), loopback_index)
         self.devices = {"Me": str(mic.get("name") or mic["index"]), "Them": str(loopback.get("name") or loopback["index"])}
@@ -78,14 +81,15 @@ class WindowsAudioCapture:
     def _open_input(self, speaker: str, device: dict) -> tuple[str, object, int, int]:
         channels = int(device["maxInputChannels"] or 1)
         rate = int(device["defaultSampleRate"])
-        stream = self._pa.open(
-            format=self._pyaudio.paInt16,
-            channels=channels,
-            rate=rate,
-            frames_per_buffer=FRAMES,
-            input=True,
-            input_device_index=int(device["index"]),
-        )
+        with PORTAUDIO_LOCK:
+            stream = self._pa.open(
+                format=self._pyaudio.paInt16,
+                channels=channels,
+                rate=rate,
+                frames_per_buffer=FRAMES,
+                input=True,
+                input_device_index=int(device["index"]),
+            )
         return speaker, stream, rate, channels
 
     def read(self, speaker: str, block: bool = True) -> bytes:
@@ -106,14 +110,15 @@ class WindowsAudioCapture:
         return [name for name, _stream, _rate, _channels in self._streams]
 
     def close(self) -> None:
-        for _name, stream, _rate, _channels in self._streams:
+        with PORTAUDIO_LOCK:
+            for _name, stream, _rate, _channels in self._streams:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            self._streams = []
             try:
-                stream.stop_stream()
-                stream.close()
+                self._pa.terminate()
             except Exception:
                 pass
-        self._streams = []
-        try:
-            self._pa.terminate()
-        except Exception:
-            pass
