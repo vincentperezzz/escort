@@ -9,7 +9,7 @@ from typing import Any
 from escort.context.library import ContextLibrary
 from escort.context.prep_chat import prep_chat
 from escort.desktop.devices import list_audio_devices
-from escort.desktop.secrets import MemorySecretStore, SecretStore, open_secret_store
+from escort.desktop.secret_store import MemorySecretStore, SecretStore, open_secret_store
 from escort.paths import repo_root
 from escort.replay import build_pipeline, load_scenario, run_replay
 from escort.settings import load_settings

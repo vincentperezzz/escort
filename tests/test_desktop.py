@@ -1,10 +1,11 @@
 from pathlib import Path
+from secrets import token_hex
 
 from fastapi.testclient import TestClient
 
 from escort.desktop.api import create_desktop_app
 from escort.desktop.runtime import DesktopRuntime
-from escort.desktop.secrets import MemorySecretStore
+from escort.desktop.secret_store import MemorySecretStore
 from escort.store import MeetingStore
 
 
@@ -44,3 +45,45 @@ def test_live_demo_cards_actions_and_delete(tmp_path: Path):
     assert wiped.json()["meeting"]["cards"] == []
     listening = client.post("/api/listen", json={"on": True})
     assert listening.json()["listening"] is True
+
+
+def test_keychain_module_does_not_shadow_stdlib_secrets():
+    hexval = token_hex(4)
+    assert len(hexval) == 8
+    assert MemorySecretStore().get("missing") is None
+    from starlette.responses import Response
+
+    assert Response is not None
+
+
+def test_desktop_package_avoids_stdlib_module_names():
+    desktop = Path(__file__).resolve().parents[1] / "escort" / "desktop"
+    blocked = {
+        "secrets",
+        "json",
+        "os",
+        "sys",
+        "typing",
+        "pathlib",
+        "http",
+        "email",
+        "ssl",
+        "copy",
+        "types",
+        "enum",
+        "abc",
+        "io",
+        "re",
+        "logging",
+        "threading",
+        "queue",
+        "uuid",
+        "hashlib",
+        "hmac",
+        "base64",
+        "ctypes",
+        "token",
+    }
+    names = {path.stem for path in desktop.glob("*.py")}
+    clash = names & blocked
+    assert not clash, f"desktop modules shadow stdlib: {sorted(clash)}"

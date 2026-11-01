@@ -13,7 +13,7 @@ from escort.store import MeetingStore
 from fastapi.testclient import TestClient
 
 from escort.desktop.api import create_desktop_app
-from escort.desktop.secrets import MemorySecretStore
+from escort.desktop.secret_store import MemorySecretStore
 
 
 def _library(tmp_path: Path) -> ContextLibrary:

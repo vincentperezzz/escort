@@ -2,42 +2,54 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 root = Path(SPECPATH).resolve().parent.parent
 ui = root / "desktop" / "ui" / "dist"
 datas = []
 if (ui / "index.html").exists():
     datas.append((str(ui), "ui"))
 
+hiddenimports = collect_submodules("escort") + [
+    "escort.desktop.secret_store",
+    "uvicorn.logging",
+    "uvicorn.loops",
+    "uvicorn.loops.auto",
+    "uvicorn.protocols",
+    "uvicorn.protocols.http",
+    "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.websockets",
+    "uvicorn.protocols.websockets.auto",
+    "uvicorn.lifespan",
+    "uvicorn.lifespan.on",
+    "multipart",
+    "pypdf",
+    "docx",
+    "webview",
+    "keyring",
+    "pystray",
+    "PIL",
+    "secrets",
+]
+
 a = Analysis(
-    [str(root / "escort" / "desktop" / "__main__.py")],
+    [str(root / "packaging" / "entry.py")],
     pathex=[str(root)],
     binaries=[],
     datas=datas,
-    hiddenimports=[
-        "escort",
-        "escort.cli",
-        "escort.server",
-        "escort.desktop.launch",
-        "escort.whatsapp.app",
-        "uvicorn.logging",
-        "uvicorn.loops",
-        "uvicorn.loops.auto",
-        "uvicorn.protocols",
-        "uvicorn.protocols.http",
-        "uvicorn.protocols.http.auto",
-        "uvicorn.lifespan",
-        "uvicorn.lifespan.on",
-        "webview",
-        "keyring",
-        "pystray",
-        "PIL",
-    ],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
 )
+# Never ship a local secrets.py as the stdlib secrets module.
+a.pure = [
+    item
+    for item in a.pure
+    if not (item[0] == "secrets" and "escort" in str(item[1]).replace("\\", "/"))
+]
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
