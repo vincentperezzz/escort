@@ -48,6 +48,27 @@ Card types, and only these three:
 
 `latency_ms` on each card is the time from the end of the triggering utterance to the card. The target is under 5 seconds. `get_live_context` also returns `latency.p50_ms` and `latency.p95_ms`. A card pushed while the person is still talking is stamped near 0 ms once the line ends, because it was already on the panel.
 
+## Install on Windows
+
+Download `EscortSetup.exe` from the GitHub Actions artifact named `EscortSetup` on the Windows installer workflow. Run it. The wizard asks for a folder, can add a Start Menu shortcut and an optional desktop shortcut, and can launch Escort when it finishes. Uninstall from Add or Remove Programs.
+
+The installer is unsigned. Windows SmartScreen may say it protected your PC. Choose More info, then Run anyway, if you trust this build.
+
+## Dev
+
+`python -m escort ...` still works. The window is a separate command.
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+pip install fastapi uvicorn pywebview pystray keyring
+cd desktop/ui && npm install && npm run build && cd ../..
+python -m escort desktop --web --demo
+```
+
+Open http://127.0.0.1:8750. MCP stays on http://127.0.0.1:8747/mcp. The WhatsApp webhook stays on port 8748.
+
 ## Run the staged demo
 
 ```bash

@@ -6,6 +6,10 @@ __pycache__/
 var/
 panel/node_modules/
 panel/.next/
+desktop/ui/node_modules/
+desktop/ui/dist/
+dist/
+build/
 agent-tools/
 .firecrawl/
 *.egg-info/

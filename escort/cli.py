@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> None:
     record = sub.add_parser("record")
     record.add_argument("--out", type=Path, default=None)
 
+    desktop = sub.add_parser("desktop")
+    desktop.add_argument("--host", default="127.0.0.1")
+    desktop.add_argument("--port", type=int, default=8750)
+    desktop.add_argument("--web", action="store_true")
+    desktop.add_argument("--demo", action="store_true")
+
     whatsapp = sub.add_parser("whatsapp")
     whatsapp.add_argument("--host", default="127.0.0.1")
     whatsapp.add_argument("--port", type=int, default=8748)
@@ -67,6 +73,16 @@ def main(argv: list[str] | None = None) -> None:
         from escort.record_eval import record_scripts
 
         record_scripts(args.out)
+        return
+    if args.cmd == "desktop":
+        from escort.desktop.launch import main as desktop_main
+
+        forwarded = ["--host", args.host, "--port", str(args.port)]
+        if args.web:
+            forwarded.append("--web")
+        if args.demo:
+            forwarded.append("--demo")
+        desktop_main(forwarded)
         return
     if args.cmd == "whatsapp":
         from escort.whatsapp.server import main as whatsapp_main
