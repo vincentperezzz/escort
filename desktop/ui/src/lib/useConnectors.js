@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, post } from "./api.js";
 
 const POLL_MS = 2000;
-const POLL_LIMIT_MS = 120000;
+const POLL_LIMIT_MS = 600000;
 
 // Used when the backend has not shipped the connectors API yet.
 const FALLBACK = [
@@ -53,16 +53,6 @@ export function useConnectors({ onChange } = {}) {
     }
   }, []);
 
-  useEffect(() => {
-    alive.current = true;
-    load();
-    const running = timers.current;
-    return () => {
-      alive.current = false;
-      Object.values(running).forEach(clearInterval);
-    };
-  }, [load]);
-
   const poll = useCallback(
     (id, done = (p) => p?.connected) => {
       stopPolling(id);
@@ -75,6 +65,18 @@ export function useConnectors({ onChange } = {}) {
           setFlag(setBusy, id);
           setFlag(setAuthUrls, id);
           onChangeRef.current?.();
+        } else if (hit && hit.pending === false && !hit.connected) {
+          stopPolling(id);
+          setFlag(setBusy, id);
+          if (
+            hit.setup_hint &&
+            (hit.setup_hint.includes("failed") ||
+              hit.setup_hint.includes("not completed") ||
+              hit.setup_hint.includes("timed out") ||
+              hit.setup_hint.includes("error"))
+          ) {
+            setFlag(setErrors, id, hit.setup_hint);
+          }
         } else if (Date.now() - started > POLL_LIMIT_MS) {
           stopPolling(id);
           setFlag(setBusy, id);
@@ -85,6 +87,24 @@ export function useConnectors({ onChange } = {}) {
     },
     [load, stopPolling],
   );
+
+  useEffect(() => {
+    alive.current = true;
+    load().then((list) => {
+      if (!alive.current || !Array.isArray(list)) return;
+      list.forEach((p) => {
+        if (p.pending && !p.connected && !timers.current[p.id]) {
+          setFlag(setBusy, p.id, "waiting");
+          poll(p.id);
+        }
+      });
+    });
+    const running = timers.current;
+    return () => {
+      alive.current = false;
+      Object.values(running).forEach(clearInterval);
+    };
+  }, [load, poll]);
 
   const connectGoogle = useCallback(async () => {
     setFlag(setErrors, "google");

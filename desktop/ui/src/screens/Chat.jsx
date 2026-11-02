@@ -103,7 +103,7 @@ export default function Chat({ status, refresh, go, seed = "" }) {
             </p>
           ) : (
             <p className="mt-3 px-2 text-center text-[12px] text-faint">
-              Muse answers from the context you loaded. Enter to send, Shift+Enter for a new line.
+              Muse uses your loaded notes, live call transcript, and screen. Enter to send, Shift+Enter for a new line.
             </p>
           )}
         </div>

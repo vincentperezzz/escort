@@ -47,6 +47,16 @@ def section_by_anchor(sections: list[Section], anchor: str) -> Section | None:
     return None
 
 
+_STOP_WORDS = {
+    "The", "And", "For", "With", "From", "This", "That", "When", "Where", "What",
+    "Who", "Why", "How", "Not", "Are", "Was", "Were", "Will", "Shall", "Can",
+    "May", "Must", "Should", "Would", "Could", "Into", "Onto", "Upon", "Over",
+    "Under", "After", "Before", "Between", "Through", "During", "Without", "Within",
+    "Notes", "Scope", "Section", "Phase", "Summary", "Meeting", "Call", "Client",
+    "Upload", "Notion", "Google", "Docs", "Sheets", "Slides", "Drive", "Untitled",
+}
+
+
 def keywords_from_prd(markdown: str, limit: int = 24) -> list[str]:
     seeds = [
         "BayaniPay",
@@ -59,7 +69,21 @@ def keywords_from_prd(markdown: str, limit: int = 24) -> list[str]:
         "card checkout",
     ]
     found = list(ASR_KEYWORDS)
+    lower_md = markdown.lower()
     for seed in seeds:
-        if seed.lower() in markdown.lower() and seed not in found:
+        if seed.lower() in lower_md and seed not in found:
             found.append(seed)
+    seen_lower = {item.lower() for item in found}
+    for match in re.finditer(r"\b([A-Z][a-zA-Z0-9_-]{2,}(?:\s+[A-Z][a-zA-Z0-9_-]{2,})?)\b", markdown):
+        candidate = match.group(1).strip()
+        parts = candidate.split()
+        if all(part in _STOP_WORDS for part in parts):
+            continue
+        if len(parts) == 1 and parts[0] in _STOP_WORDS:
+            continue
+        if candidate.lower() not in seen_lower:
+            found.append(candidate)
+            seen_lower.add(candidate.lower())
+            if len(found) >= limit:
+                break
     return found[:limit]

@@ -191,9 +191,9 @@ function ProviderCard({ provider, ctl }) {
             {busy === "waiting" ? (
               <div className="flex items-center gap-3 text-xs">
                 {authUrl ? (
-                  <a className={`inline-flex items-center gap-1 ${LINK}`} href={authUrl} target="_blank" rel="noreferrer">
+                  <button type="button" className={`inline-flex items-center gap-1 ${LINK}`} onClick={ctl.connectGoogle}>
                     Open sign-in again <ArrowSquareOut size={14} aria-hidden />
-                  </a>
+                  </button>
                 ) : null}
                 <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
                   Cancel
@@ -215,11 +215,9 @@ function ProviderCard({ provider, ctl }) {
             </Button>
             {busy === "waiting" ? (
               <div className="flex items-center gap-3 text-xs">
-                {authUrl ? (
-                  <a className={`inline-flex items-center gap-1 ${LINK}`} href={authUrl} target="_blank" rel="noreferrer">
-                    Open Notion again <ArrowSquareOut size={14} aria-hidden />
-                  </a>
-                ) : null}
+                <button type="button" className={`inline-flex items-center gap-1 ${LINK}`} onClick={ctl.connectNotionOAuth}>
+                  Open Notion again <ArrowSquareOut size={14} aria-hidden />
+                </button>
                 <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
                   Cancel
                 </button>

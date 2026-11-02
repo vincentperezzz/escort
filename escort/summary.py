@@ -130,7 +130,12 @@ def summary_schema() -> dict[str, Any]:
 def build_summary_request(settings: Settings, snapshot: dict[str, Any], notes: str) -> dict[str, Any]:
     meeting = snapshot.get("meeting") or {}
     turns = meeting.get("turns") or []
-    transcript = "\n".join(f"{turn.get('speaker')}: {turn.get('text')}" for turn in turns)[-MAX_TRANSCRIPT_CHARS:]
+    def _fmt_turn(turn: dict[str, Any]) -> str:
+        vs = turn.get("vendor_speaker")
+        tag = f" [Speaker {vs}]" if vs else ""
+        return f"{turn.get('speaker')}{tag}: {turn.get('text')}"
+
+    transcript = "\n".join(_fmt_turn(turn) for turn in turns)[-MAX_TRANSCRIPT_CHARS:]
     cards = [
         {key: card.get(key) for key in ("type", "title", "body", "prd_section", "who", "what", "when")}
         for card in snapshot.get("cards") or []
@@ -149,11 +154,14 @@ def build_summary_request(settings: Settings, snapshot: dict[str, Any], notes: s
             {
                 "role": "system",
                 "content": (
-                    "Summarise a finished Taglish client call for the user (Me). "
-                    "title: a short meeting title. bullets: 3-6 concrete takeaways in plain English. "
-                    "commitments: every promise, who is Me or Them, due is the deadline or 'unspecified'. "
-                    "conflicts: requests that go against the notes, section is the notes heading. "
-                    "Use only what is in the transcript and cards. Never invent."
+                    "Summarise a finished client call for the user (Me) in plain, natural English. "
+                    "title: a short meeting title. bullets: 3-6 concrete takeaways in plain English, "
+                    "attributing who said or requested what (using real participant names from the notes or transcript "
+                    "when available and correcting obvious ASR name misspellings). "
+                    "commitments: every promise, who is Me or Them (or the identified speaker name), due is the deadline or 'unspecified'. "
+                    "conflicts: requests or statements that do not align with the loaded notes OR that contradict "
+                    "what was stated/agreed in the first part of the call (section is the notes heading, or 'Earlier in this call' when no prior notes were loaded). "
+                    "Use only what is in the transcript, notes, and cards. Never invent."
                 ),
             },
             {"role": "user", "content": text},

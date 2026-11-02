@@ -65,6 +65,12 @@ def spark_model_name(model: str) -> str:
     return cleaned
 
 
+def _format_utterance(item: Utterance) -> str:
+    if item.vendor_speaker:
+        return f"{item.speaker} [Speaker {item.vendor_speaker}]: {item.text}"
+    return f"{item.speaker}: {item.text}"
+
+
 def build_spark_request(
     *,
     model: str,
@@ -73,22 +79,39 @@ def build_spark_request(
     trigger: Utterance,
     frame: FrameRecord | None,
 ) -> dict[str, Any]:
-    lines = [f"{item.speaker}: {item.text}" for item in utterances[-8:]]
-    transcript = "\n".join(lines) if lines else "(empty)"
+    if len(utterances) > 24:
+        early = [_format_utterance(item) for item in utterances[:10]]
+        recent = [_format_utterance(item) for item in utterances[-18:]]
+        transcript = (
+            "[First part of the meeting (baseline statements & agreements)]\n"
+            + "\n".join(early)
+            + f"\n... ({len(utterances) - 28} intermediate turns omitted) ...\n"
+            + "[Recent part of the meeting]\n"
+            + "\n".join(recent)
+        )
+    else:
+        lines = [_format_utterance(item) for item in utterances]
+        transcript = "\n".join(lines) if lines else "(empty)"
+    has_notes = bool(prd_text and prd_text.strip())
+    notes_block = (
+        prd_text[:24000]
+        if has_notes
+        else "(No prior notes loaded — operate in live note-taking & intra-meeting alignment mode. Use statements and agreements from the first/earlier part of this call as the baseline.)"
+    )
     text = (
-        "PRD:\n"
-        f"{prd_text[:24000]}\n\n"
+        "PRD / Loaded Notes:\n"
+        f"{notes_block}\n\n"
         "Transcript window:\n"
         f"{transcript}\n\n"
-        "The utterance that just finished, and the only one you should judge:\n"
-        f"{trigger.speaker}: {trigger.text}"
+        "The utterance that just finished, and the primary turn you should judge:\n"
+        f"{_format_utterance(trigger)}"
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     if frame is not None:
         content.append(
             {
                 "type": "image_url",
-                "image_url": {"url": _data_url(frame.path), "detail": "low"},
+                "image_url": {"url": _data_url(frame.path, max_edge=1024), "detail": "auto"},
             }
         )
     return {
@@ -100,14 +123,26 @@ def build_spark_request(
             {
                 "role": "system",
                 "content": (
-                    "You are the scope guard for a live Taglish client call. "
-                    "Me is the user. Them is the client. Speaker labels are already correct "
-                    "because the mic and the system audio were captured as separate streams. "
+                    "You are the live alignment, scope guard, and note-taking copilot for a client meeting. "
+                    "Me is the user (microphone stream). Them is the remote side (system audio stream). "
+                    "When a screen frame is attached, inspect the meeting window (participant tiles, active speaker "
+                    "highlight, open/muted mic indicators, shared slides/documents, and chat names) together with "
+                    "the PRD/notes and transcript to piece together who is speaking, who is on the screen, and who "
+                    "mentioned or promised what, and use visible names on screen or in the PRD to fix misspelled or "
+                    "phonetically misheard ASR names. "
                     "Return only PRD_CONFLICT, COMMITMENT, and SUGGESTED_REPLY cards. "
-                    "PRD_CONFLICT must cite a real heading from the PRD in prd_section. "
-                    "COMMITMENT sets who to Me or Them and what to the promise. "
-                    "SUGGESTED_REPLY is one natural Taglish sentence Me can say out loud, "
-                    "code-switched the way the call already sounds, not a translation. "
+                    "1) WITH OR WITHOUT PRIOR NOTES: If no prior PRD/notes are loaded, seamlessly adjust and operate in "
+                    "live note-taking & intra-meeting alignment mode — capture important commitments, action items, "
+                    "key decisions, and agreed deliverables as COMMITMENT cards so the meeting is thoroughly noted. "
+                    "2) INTRA-MEETING & NOTES ALIGNMENT (PRD_CONFLICT): Flag anything said or shown on screen that "
+                    "does not align with EITHER the loaded PRD/notes OR what was stated/agreed in the first/earlier "
+                    "part of this meeting! If it conflicts with loaded notes, cite the heading from the PRD in "
+                    "prd_section. If it contradicts or drifts from what was said or agreed earlier in this meeting "
+                    "(especially when no prior notes are loaded, or when a speaker contradicts an earlier agreement "
+                    "from the start of the call), emit PRD_CONFLICT with prd_section set to 'Earlier in this call'. "
+                    "3) COMMITMENT sets who to Me or Them (or the identified speaker name on Them) and what to the promise or key decision note. "
+                    "4) SUGGESTED_REPLY is one natural sentence Me can say out loud, matching the language actually used "
+                    "in the call (English by default if the conversation is in English; natural Taglish only if they are speaking Taglish). "
                     "Return an empty cards list when nothing new qualifies. "
                     "Do not invent a fourth card type."
                 ),
@@ -147,14 +182,15 @@ def parse_spark_response(payload: dict[str, Any]) -> list[CardDraft]:
         body = (item.get("body") or "").strip()
         if not title or not body:
             continue
-        if card_type == "PRD_CONFLICT" and not (item.get("prd_section") or "").strip():
-            continue
+        prd_section = (item.get("prd_section") or "").strip() or None
+        if card_type == "PRD_CONFLICT" and not prd_section:
+            prd_section = "Earlier in this call"
         cards.append(
             CardDraft(
                 type=card_type,
                 title=title,
                 body=body,
-                prd_section=(item.get("prd_section") or None),
+                prd_section=prd_section,
                 who=(item.get("who") or None),
                 what=(item.get("what") or None),
             )

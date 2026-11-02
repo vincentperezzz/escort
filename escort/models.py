@@ -63,10 +63,13 @@ class Utterance:
     end_ms: int
     finished_at: float
     created_at: str
+    vendor_speaker: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("finished_at", None)
+        if data.get("vendor_speaker") is None:
+            data.pop("vendor_speaker", None)
         return data
 
 

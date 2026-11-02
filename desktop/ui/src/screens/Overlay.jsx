@@ -19,44 +19,19 @@ const QUICK = [
 const bridge = typeof window !== "undefined" ? window.escortOverlay : undefined;
 
 /**
- * Clicks over transparent pixels fall through to the desktop. Only elements
- * marked data-hit take the mouse; the main process forwards mouse moves so we
- * can tell when the pointer is over one.
+ * Keep the overlay window interactive at all times so buttons and the Ask Muse
+ * input never become unclickable after focus or style transitions on Windows.
  */
 function useClickThrough() {
   useEffect(() => {
     if (!bridge) return undefined;
-    let ignoring = null;
-    let held = false; // a press that started on a hit element keeps the mouse until release
-    const set = (ignore) => {
-      if (ignore !== ignoring) {
-        ignoring = ignore;
-        bridge.setIgnoreMouse(ignore);
-      }
-    };
-    const onMove = (e) => {
-      if (!held) set(!(e.target instanceof Element && e.target.closest("[data-hit]")));
-    };
-    const onDown = (e) => {
-      held = e.target instanceof Element && Boolean(e.target.closest("[data-hit]"));
-    };
-    const onUp = (e) => {
-      held = false;
-      onMove(e);
-    };
-    const onLeave = () => {
-      if (!held) set(true);
-    };
-    set(true);
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("pointerup", onUp, true);
-    document.documentElement.addEventListener("mouseleave", onLeave);
+    bridge.setIgnoreMouse(false);
+    const keepInteractive = () => bridge.setIgnoreMouse(false);
+    window.addEventListener("pointerenter", keepInteractive, true);
+    window.addEventListener("pointerdown", keepInteractive, true);
     return () => {
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("pointerup", onUp, true);
-      document.documentElement.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("pointerenter", keepInteractive, true);
+      window.removeEventListener("pointerdown", keepInteractive, true);
     };
   }, []);
 }
@@ -416,12 +391,26 @@ const Composer = memo(function Composer({ onAsk, busy }) {
   const reported = useRef(false);
 
   const report = useCallback((on) => {
+    if (on) {
+      bridge?.setIgnoreMouse(false);
+      bridge?.focusInput();
+    } else if (reported.current) {
+      bridge?.releaseFocus();
+    }
     if (reported.current === on) return;
     reported.current = on;
-    if (on) bridge?.focusInput();
-    else bridge?.releaseFocus();
     post("/api/overlay", { input_focus: on }).catch(() => {});
   }, []);
+
+  const focusBox = useCallback(
+    (e) => {
+      if (e?.target instanceof Element && e.target.closest("button")) return;
+      report(true);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      setTimeout(() => inputRef.current?.focus(), 40);
+    },
+    [report],
+  );
 
   useEffect(() => () => report(false), [report]);
 
@@ -433,12 +422,18 @@ const Composer = memo(function Composer({ onAsk, busy }) {
   };
 
   return (
-    <form className="ov-capsule flex h-12 shrink-0 items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5" onSubmit={submit}>
+    <form
+      className="ov-capsule flex h-12 shrink-0 cursor-text items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5"
+      onPointerDown={focusBox}
+      onClick={focusBox}
+      onSubmit={submit}
+    >
       <input
         ref={inputRef}
         value={input}
         onChange={(e) => setInput(e.target.value)}
-        onPointerDown={() => bridge?.focusInput()}
+        onPointerDown={focusBox}
+        onClick={focusBox}
         onFocus={() => report(true)}
         onBlur={() => report(false)}
         onKeyDown={(e) => {
@@ -470,7 +465,7 @@ const Composer = memo(function Composer({ onAsk, busy }) {
 const EmptyNote = memo(function EmptyNote({ offline, listening }) {
   return (
     <p className="ov-tile rounded-[18px] px-4 py-3.5 text-[13px] leading-relaxed text-muted">
-      {offline ? "Can't reach Escort. Retrying." : listening ? "Listening. Cards land here when a line crosses your notes." : "Press play to start listening."}
+      {offline ? "Can't reach Escort. Retrying." : listening ? "Listening. Taking live notes and watching for commitments or misalignments." : "Press play to start listening."}
     </p>
   );
 });

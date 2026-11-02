@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from escort.capture.windows_audio import parse_device_id
 from escort.live import LiveStats, start_live
+from escort.models import FrameRecord
 from escort.pipeline import Pipeline
 from escort.prd import keywords_from_prd
 from escort.replay import build_segmenter, build_spark, resolve_transcriber_mode
@@ -118,3 +119,38 @@ class LiveSession:
 def start_session(store: MeetingStore, settings: Settings, prd_text: str, **kwargs: Any) -> LiveSession:
     """Seam for tests: conftest replaces this so no real screen or audio is touched."""
     return LiveSession(store, settings, prd_text, **kwargs).start()
+
+
+def grab_chat_frame(
+    store: MeetingStore,
+    monitor_index: int = 1,
+    *,
+    grabber_factory: Callable[[], Any] | None = None,
+) -> FrameRecord | None:
+    """Capture a fresh screen frame on demand for Muse chat so it can always see the screen."""
+    if grabber_factory is None and getattr(start_session, "__module__", "") != __name__:
+        return store.latest_frame()
+    grabber = None
+    try:
+        if grabber_factory is not None:
+            grabber = grabber_factory()
+        else:
+            from escort.capture.screen import ScreenGrabber
+
+            grabber = ScreenGrabber(monitor=monitor_index)
+        if hasattr(grabber, "set_monitor"):
+            grabber.set_monitor(monitor_index)
+        image = grabber.grab()
+        from escort.diff import dhash
+
+        path = store.save_png(image, "frame")
+        return store.add_frame(path=path, phash=f"{dhash(image):016x}")
+    except Exception as exc:
+        log.debug("On-demand chat screen grab failed: %s", exc)
+        return store.latest_frame()
+    finally:
+        if grabber is not None and hasattr(grabber, "close"):
+            try:
+                grabber.close()
+            except Exception:
+                pass

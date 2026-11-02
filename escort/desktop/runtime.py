@@ -313,6 +313,81 @@ class DesktopRuntime:
             self.context.apply_to_store(self.store)
         return self.public_status()
 
+    def _meeting_chat_context(self) -> tuple[str, str | None]:
+        """Assemble live transcript, partials, cards, calendar attendees, and latest screen frame for Muse chat."""
+        lines: list[str] = []
+        screen = self.screen_status()
+        target = self._watch_target()
+        enabled_items = [item for item in self.context.items() if item.enabled]
+        if enabled_items:
+            item_list = ", ".join(f"{item.source_label} · {item.title}" for item in enabled_items)
+            lines.append(f"Loaded context documents ({len(enabled_items)}): {item_list}")
+        else:
+            lines.append(
+                "Loaded context documents: none loaded prior to this meeting — operating in live note-taking & "
+                "intra-meeting alignment mode (capturing live notes from the conversation and screen, and flagging "
+                "whenever later parts of the conversation do not align with what was stated or agreed in the first part of the meeting)."
+            )
+        lines.append(
+            f"Live listening status: {'ON (actively capturing mic, system audio, and screen)' if self.listening else 'OFF (not currently capturing live audio)'} "
+            f"| Watched display: {screen.get('monitor') or target.get('label') or 'Display 1'}"
+        )
+        try:
+            events = self.context.upcoming_events(5)
+        except Exception:
+            events = []
+        prep_id = (self.context.data.get("prep") or {}).get("selected_event_id")
+        if events:
+            cal_lines = []
+            for ev in events[:4]:
+                marker = " [SELECTED MEETING]" if ev.id == prep_id else ""
+                attendees = f" | Attendees: {', '.join(ev.attendees)}" if ev.attendees else ""
+                cal_lines.append(f"- {ev.title} ({ev.start}){marker}{attendees}")
+            lines.append("Upcoming calendar meetings:\n" + "\n".join(cal_lines))
+
+        frame = live_capture.grab_chat_frame(self.store, monitor_index=int(target.get("index", 1)))
+        with self.store.lock:
+            all_utterances = list(self.store.utterances)
+            partials = dict(self.store.partials)
+            cards = list(self.store.cards[-15:])
+            if frame is None:
+                frame = self.store.latest_frame()
+
+        if cards:
+            card_lines = []
+            for card in cards:
+                extra = f" (Section: {card.prd_section})" if card.prd_section else ""
+                who_what = f" [{card.who}: {card.what}]" if card.who or card.what else ""
+                card_lines.append(f"- [{card.type}] {card.title}{extra}{who_what}: {card.body}")
+            lines.append("Live cards & flags raised in this meeting:\n" + "\n".join(card_lines))
+
+        if all_utterances or partials:
+            turn_lines = []
+            if len(all_utterances) > 40:
+                turn_lines.append("[First part of the meeting (baseline statements & agreements)]")
+                for utt in all_utterances[:12]:
+                    spk = f"{utt.speaker} [Speaker {utt.vendor_speaker}]" if utt.vendor_speaker else utt.speaker
+                    turn_lines.append(f"{spk}: {utt.text}")
+                turn_lines.append(f"... ({len(all_utterances) - 40} intermediate turns omitted) ...")
+                turn_lines.append("[Recent part of the meeting]")
+                recent_utterances = all_utterances[-28:]
+            else:
+                recent_utterances = all_utterances
+            for utt in recent_utterances:
+                spk = f"{utt.speaker} [Speaker {utt.vendor_speaker}]" if utt.vendor_speaker else utt.speaker
+                turn_lines.append(f"{spk}: {utt.text}")
+            for spk, part_text in partials.items():
+                if part_text and part_text.strip():
+                    turn_lines.append(f"{spk} (speaking right now): {part_text.strip()}")
+            lines.append("Live meeting transcript (Me = user's mic, Them = remote call audio):\n" + "\n".join(turn_lines))
+        else:
+            lines.append("Live meeting transcript: (No speech transcribed yet in this session.)")
+
+        frame_path = frame.path if frame is not None else None
+        if frame_path:
+            lines.append("Latest meeting screen frame: attached as an image. Use it to read participant names, active-speaker indicators, open mics, slides, and shared documents.")
+        return "\n\n".join(lines), frame_path
+
     def context_chat(self, message: str) -> dict[str, Any]:
         """Prep chat and overlay ask box. Settings requests are handled here, before Muse."""
         with self._lock:
@@ -325,11 +400,15 @@ class DesktopRuntime:
                 changed = settings_reply.changed
                 self._chat_pending = settings_reply.pending
             else:
+                meeting_note, frame_path = self._meeting_chat_context()
                 answer = prep_chat(
                     message,
                     self.context.combined_markdown(),
                     self.context.chat_history(),
                     settings_note=describe_settings(self),
+                    settings=self._settings(),
+                    meeting_note=meeting_note,
+                    frame_path=frame_path,
                 )
             self.context.append_chat("assistant", answer, changed=changed or None)
         return {"reply": answer, "changed": changed, "context": self.context.public_view()}

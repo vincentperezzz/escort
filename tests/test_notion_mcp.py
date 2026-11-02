@@ -371,6 +371,21 @@ def test_real_loopback_redirect_completes_connection():
     assert mcp.connected()
 
 
+def test_repeated_begin_reuses_listener_and_accepts_first_tab_callback():
+    mcp, fake, _secrets, _opened = _mcp()
+    url1 = mcp.begin()
+    params1 = _params(url1)
+    url2 = mcp.begin()
+    params2 = _params(url2)
+    assert params1["redirect_uri"] == params2["redirect_uri"]
+    assert params1["state"] != params2["state"]
+    fake.codes["c_first"] = params1["code_challenge"]
+    with httpx.Client() as browser:
+        response = browser.get(params1["redirect_uri"], params={"code": "c_first", "state": params1["state"]})
+    assert response.status_code == 200 and "connected to Notion" in response.text
+    assert mcp.connected()
+
+
 def test_loopback_falls_back_to_localhost_then_reports_rejection_and_keeps_token():
     fake = FakeNotion(reject_hosts={"127.0.0.1"})
     mcp, _f, _s, _o = _mcp(fake=fake)

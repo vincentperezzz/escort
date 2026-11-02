@@ -20,6 +20,7 @@ const HOTKEY = "CommandOrControl+Shift+E";
 // backend may still report the old one for a poll or two; trust the page meanwhile.
 const LOCAL_OPACITY_HOLD_MS = 900;
 const LOCAL_COLLAPSE_HOLD_MS = 1500;
+const LOCAL_FOCUS_HOLD_MS = 2500;
 
 // --- logging ----------------------------------------------------------------
 
@@ -94,6 +95,7 @@ const applied = { visible: undefined, collapsed: undefined, opacity: undefined, 
 let ignoringMouse = null;
 let localOpacityUntil = 0;
 let localCollapseUntil = 0;
+let localFocusUntil = 0;
 
 function quit(reason) {
   if (quitting) return;
@@ -147,7 +149,7 @@ function createWindow() {
   });
   win.setAlwaysOnTop(true, "screen-saver");
   win.setMenu(null);
-  setIgnoreMouse(true);
+  setIgnoreMouse(false);
 
   win.on("moved", () => {
     if (!win || win.isDestroyed()) return;
@@ -184,25 +186,31 @@ function alive() {
   return win && !win.isDestroyed();
 }
 
-function setIgnoreMouse(ignore) {
-  if (!alive() || ignoringMouse === ignore) return;
-  ignoringMouse = ignore;
-  win.setIgnoreMouseEvents(ignore, { forward: true });
+function setIgnoreMouse(_ignore) {
+  if (!alive()) return;
+  ignoringMouse = false;
+  win.setIgnoreMouseEvents(false);
 }
 
 function reapplyMouse() {
-  if (alive() && ignoringMouse !== null) win.setIgnoreMouseEvents(ignoringMouse, { forward: true });
+  if (alive()) win.setIgnoreMouseEvents(false);
 }
 
 /** Content protection (WDA_EXCLUDEFROMCAPTURE) is re-asserted on every show. */
 function reapplyShare() {
-  if (alive() && applied.share !== undefined) win.setContentProtection(applied.share);
+  if (alive() && applied.share !== undefined) {
+    win.setContentProtection(applied.share);
+    reapplyMouse();
+  }
 }
 
 function setShare(on) {
   if (applied.share === on) return;
   applied.share = on;
-  if (alive()) win.setContentProtection(on);
+  if (alive()) {
+    win.setContentProtection(on);
+    reapplyMouse();
+  }
   log(`hide_from_share=${on}`);
 }
 
@@ -211,6 +219,7 @@ function setCollapsed(on) {
   applied.collapsed = on;
   const [x, y] = win.getPosition();
   win.setBounds({ x, y, width: WIDTH, height: on ? COLLAPSED_HEIGHT : OPEN_HEIGHT }, false);
+  reapplyMouse();
 }
 
 function setOpacity(value) {
@@ -219,6 +228,7 @@ function setOpacity(value) {
   if (applied.opacity === rounded) return;
   applied.opacity = rounded;
   win.setOpacity(rounded);
+  reapplyMouse();
 }
 
 /** Show without activating; window styles are re-asserted because a show can reset them. */
@@ -245,17 +255,20 @@ function setVisible(on) {
 
 function takeFocus() {
   if (!alive()) return;
+  localFocusUntil = Date.now() + LOCAL_FOCUS_HOLD_MS;
   applied.focus = true;
+  win.setIgnoreMouseEvents(false);
   win.setFocusable(true);
-  reapplyMouse();
   win.focus();
   win.webContents.focus();
+  reapplyMouse();
   log(`Focus taken (focused: ${win.isFocused()}).`);
 }
 
 /** Give the keyboard back to whatever app the user was in before typing here. */
 function releaseFocus() {
   if (!alive()) return;
+  localFocusUntil = Date.now() + 800;
   applied.focus = false;
   const had = win.isFocused();
   if (had) win.blur();
@@ -283,7 +296,7 @@ function applyState(state) {
   if (typeof state.collapsed === "boolean" && now >= localCollapseUntil) setCollapsed(state.collapsed);
   if (typeof state.opacity === "number" && now >= localOpacityUntil) setOpacity(state.opacity);
   if (typeof state.visible === "boolean") setVisible(state.visible);
-  if (typeof state.input_focus === "boolean" && applied.visible) setInputFocus(state.input_focus);
+  if (typeof state.input_focus === "boolean" && applied.visible && now >= localFocusUntil) setInputFocus(state.input_focus);
 }
 
 // --- backend polling ------------------------------------------------------------
@@ -360,7 +373,9 @@ function registerIpc() {
     if (fromOverlay(event)) setIgnoreMouse(Boolean(ignore));
   });
   ipcMain.on("overlay:focus-input", (event) => {
-    if (fromOverlay(event) && !(applied.focus && win.isFocused())) takeFocus();
+    if (!fromOverlay(event)) return;
+    localFocusUntil = Date.now() + LOCAL_FOCUS_HOLD_MS;
+    if (!(applied.focus && win.isFocused())) takeFocus();
   });
   ipcMain.on("overlay:release-focus", (event) => {
     if (fromOverlay(event)) releaseFocus();

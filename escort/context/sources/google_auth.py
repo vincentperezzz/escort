@@ -227,6 +227,10 @@ class GoogleAuth:
             value = self._user_file()[1]
         elif source in ("env", "setup"):
             value = os.environ.get("ESCORT_GOOGLE_CLIENT_SECRET") or self.secrets.get(CLIENT_SECRET_KEY) or ""
+            if not value and source == "setup":
+                user_id, user_secret, _ = self._user_file()
+                if user_id and user_id == (self._client_id_getter() or "").strip():
+                    value = user_secret
         else:
             value = ""
         return value.strip() or None
@@ -241,6 +245,10 @@ class GoogleAuth:
             value = self._user_file()[2]
         elif source in ("env", "setup"):
             value = os.environ.get("ESCORT_GOOGLE_API_KEY") or self.secrets.get(API_KEY_KEY) or ""
+            if not value and source == "setup":
+                user_id, _, user_api_key = self._user_file()
+                if user_id and user_id == (self._client_id_getter() or "").strip():
+                    value = user_api_key
         else:
             value = ""
         return value.strip() or None

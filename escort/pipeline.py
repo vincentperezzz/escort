@@ -6,10 +6,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from escort.asr_text import correct_names
 from escort.deixis import detect_deixis
 from escort.diff import FrameGate
 from escort.models import CARD_TYPES, CardDraft, CardRecord, Turn, Utterance
-from escort.prd import parse_sections
+from escort.prd import keywords_from_prd, parse_sections
 from escort.sam.fallback import crop_share
 from escort.spark.rules import RuleSpark, infer_when
 from escort.store import MeetingStore, new_id, utc_now
@@ -22,6 +23,7 @@ class Pipeline:
         self.spark = spark
         self.segmenter = segmenter
         self.prd_text = prd_text
+        self._known_names = keywords_from_prd(prd_text, limit=64)
         self.fast = RuleSpark()
         self.gate = FrameGate()
         self._sparked_utt: str | None = None
@@ -48,21 +50,23 @@ class Pipeline:
         return [self.finish_turn(turn) for turn in turns if turn.text.strip()]
 
     def finish_turn(self, turn: Turn) -> Utterance:
-        self.note_partial(turn.speaker, turn.text)
+        text = correct_names(turn.text, self._known_names)
+        self.note_partial(turn.speaker, text)
         finished_at = time.perf_counter()
         utterance = self.store.add_utterance(
             speaker=turn.speaker,
-            text=turn.text,
+            text=text,
             start_ms=turn.start_ms,
             end_ms=turn.end_ms,
             finished_at=finished_at,
+            vendor_speaker=turn.vendor_speaker,
         )
         self._bind_early_cards(utterance)
         self._emit(utterance)
         return utterance
 
     def note_partial(self, speaker: str, text: str) -> None:
-        cleaned = text.strip()
+        cleaned = correct_names(text.strip(), self._known_names)
         self.store.set_partial(speaker, cleaned)
         if len(cleaned) < 20:
             return
@@ -79,7 +83,7 @@ class Pipeline:
             draft
             for draft in self.fast.review(
                 prd_text=self.prd_text,
-                utterances=[],
+                utterances=list(self.store.utterances),
                 trigger=ghost,
             )
             if draft.type == "PRD_CONFLICT"
@@ -264,6 +268,8 @@ class Pipeline:
 
 def _dedupe_key(draft: CardDraft) -> tuple:
     if draft.type == "PRD_CONFLICT":
+        if draft.prd_section == "Earlier in this call":
+            return (draft.type, draft.prd_section, draft.title)
         return (draft.type, draft.prd_section)
     if draft.type == "COMMITMENT":
         return (draft.type, draft.who, (draft.what or "")[:80])

@@ -29,9 +29,11 @@ def ask_meeting(config: WhatsAppConfig, question: str, context: str, http: httpx
                     {
                         "role": "system",
                         "content": (
-                            "You are Escort, texting Boss on WhatsApp during a live Taglish client call. "
-                            "Muse is the brain. Answer in a short text he can read on a phone. "
-                            "Use the meeting state. Do not invent a PRD section."
+                            "You are Escort, texting the user on WhatsApp during a live client call. "
+                            "Muse is the brain. Respond in clear, natural English by default, or match the language "
+                            "the user asked in (do not default to Taglish unless asked in Taglish). "
+                            "Answer in a short, helpful text they can read on a phone, attribute who said what "
+                            "(fixing ASR name misspellings using the notes), and flag anything that does not align with the loaded notes."
                         ),
                     },
                     {

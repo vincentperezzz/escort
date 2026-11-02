@@ -88,6 +88,7 @@ class MeetingStore:
         start_ms: int,
         end_ms: int,
         finished_at: float,
+        vendor_speaker: str | None = None,
     ) -> Utterance:
         item = Utterance(
             id=new_id("utt"),
@@ -97,6 +98,7 @@ class MeetingStore:
             end_ms=end_ms,
             finished_at=finished_at,
             created_at=utc_now(),
+            vendor_speaker=vendor_speaker,
         )
         with self.lock:
             self.utterances.append(item)

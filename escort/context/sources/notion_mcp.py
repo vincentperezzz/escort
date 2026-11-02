@@ -51,7 +51,7 @@ CLIENT_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2025-06-18"
 CALLBACK_PATH = "/callback"
 LOOPBACK_PORTS = 3  # registered once; the listener binds whichever is free
-FLOW_TIMEOUT_S = 300.0
+FLOW_TIMEOUT_S = 600.0
 REFRESH_SKEW_S = 300.0
 TERMINAL_ERRORS = {"invalid_grant", "invalid_client", "unauthorized_client"}
 REDIRECT_REJECTED = {"invalid_redirect_uri", "invalid_client_metadata"}
@@ -62,7 +62,7 @@ TOOL_HINTS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] 
     "fetch": (("notion-fetch", "fetch"), ("fetch",), ("async", "file")),
     "create_page": (("notion-create-pages", "create-pages", "notion-create-page"), ("create", "page"), ("database", "comment", "view")),
     "update_page": (("notion-update-page", "update-page"), ("update", "page"), ("database", "data-source", "view")),
-    "self": (("notion-get-self",), ("self",), ()),
+    "self": (("notion-get-self", "API-get-self", "get-self"), ("self",), ()),
 }
 TOOL_LABELS = {
     "search": "search pages",
@@ -79,6 +79,11 @@ class NotionReconnectError(ConnectorAuthError):
     code = "needs_reconnect"
 
 
+class _OAuthHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 @dataclass
 class PendingFlow:
     state: str
@@ -88,6 +93,8 @@ class PendingFlow:
     client: dict[str, Any]
     meta: dict[str, Any]
     server: ThreadingHTTPServer | None = None
+    timer: threading.Timer | None = None
+    verifiers: dict[str, str] = field(default_factory=dict)
     finished: threading.Event = field(default_factory=threading.Event)
 
 
@@ -304,10 +311,9 @@ class NotionMcp:
             if parts.scheme != "http" or parts.hostname not in ("127.0.0.1", "localhost") or not parts.port:
                 continue
             try:
-                server = ThreadingHTTPServer(("127.0.0.1", parts.port), _make_handler(self, parts.path or "/"))
+                server = _OAuthHTTPServer(("127.0.0.1", parts.port), _make_handler(self, parts.path or "/"))
             except OSError:
                 continue
-            server.daemon_threads = True
             return server, uri
         return None
 
@@ -329,33 +335,66 @@ class NotionMcp:
         """Discover, register once, listen on the registered loopback port, open Notion's consent page."""
         meta = self.discover()
         client = self.ensure_client(meta)
-        bound = self._bind(client)
-        if bound is None:
-            # Every registered port is taken right now: register fresh ports once.
-            client = self.ensure_client(meta, force_new=True)
-            bound = self._bind(client)
-        if bound is None:
-            raise ConnectorSetupError(PROVIDER, "Escort could not open a local port for the Notion sign-in. Try again.", code="no_port")
-        server, redirect_uri = bound
         state = stdlib_secrets.token_urlsafe(32)
         verifier, challenge = pkce_pair()
-        flow = PendingFlow(
-            state=state,
-            verifier=verifier,
-            redirect_uri=redirect_uri,
-            auth_url=self.build_auth_url(meta, client, redirect_uri, state, challenge),
-            client=client,
-            meta=meta,
-            server=server,
-        )
         with self._flow_lock:
-            self._cancel_locked()
-            self._flow = flow
-            self.last_error = None
-        threading.Thread(target=server.serve_forever, name="escort-notion-oauth", daemon=True).start()
-        timer = threading.Timer(timeout_s, self._expire, args=(flow,))
-        timer.daemon = True
-        timer.start()
+            existing = self._flow
+            if (
+                existing is not None
+                and not existing.finished.is_set()
+                and existing.server is not None
+                and existing.redirect_uri in (client.get("redirect_uris") or [])
+                and existing.client.get("client_id") == client.get("client_id")
+            ):
+                # Keep the already-bound loopback server alive so previously opened browser tabs
+                # still connect to the same port and can complete with their original state/verifier.
+                auth_url = self.build_auth_url(meta, client, existing.redirect_uri, state, challenge)
+                existing.verifiers[existing.state] = existing.verifier
+                existing.verifiers[state] = verifier
+                existing.state = state
+                existing.verifier = verifier
+                existing.auth_url = auth_url
+                existing.client = client
+                existing.meta = meta
+                if existing.timer is not None:
+                    existing.timer.cancel()
+                timer = threading.Timer(timeout_s, self._expire, args=(existing,))
+                timer.daemon = True
+                timer.start()
+                existing.timer = timer
+                self.last_error = None
+                flow = existing
+                start_server = False
+            else:
+                self._cancel_locked()
+                bound = self._bind(client)
+                if bound is None:
+                    # Every registered port is taken right now: register fresh ports once.
+                    client = self.ensure_client(meta, force_new=True)
+                    bound = self._bind(client)
+                if bound is None:
+                    raise ConnectorSetupError(PROVIDER, "Escort could not open a local port for the Notion sign-in. Try again.", code="no_port")
+                server, redirect_uri = bound
+                auth_url = self.build_auth_url(meta, client, redirect_uri, state, challenge)
+                flow = PendingFlow(
+                    state=state,
+                    verifier=verifier,
+                    redirect_uri=redirect_uri,
+                    auth_url=auth_url,
+                    client=client,
+                    meta=meta,
+                    server=server,
+                    verifiers={state: verifier},
+                )
+                timer = threading.Timer(timeout_s, self._expire, args=(flow,))
+                timer.daemon = True
+                timer.start()
+                flow.timer = timer
+                self._flow = flow
+                self.last_error = None
+                start_server = True
+        if start_server and flow.server is not None:
+            threading.Thread(target=flow.server.serve_forever, name="escort-notion-oauth", daemon=True).start()
         if open_browser:
             try:
                 self._open_browser(flow.auth_url)
@@ -382,12 +421,22 @@ class NotionMcp:
 
     def _finish_locked(self, flow: PendingFlow) -> None:
         flow.finished.set()
+        if flow.timer is not None:
+            flow.timer.cancel()
+            flow.timer = None
         server, flow.server = flow.server, None
         if server is not None:
 
             def _stop() -> None:
-                server.shutdown()
-                server.server_close()
+                time.sleep(0.05)
+                try:
+                    server.shutdown()
+                except Exception:
+                    pass
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
 
             threading.Thread(target=_stop, daemon=True).start()
 
@@ -395,28 +444,50 @@ class NotionMcp:
         with self._flow_lock:
             flow = self._flow
             if flow is None or flow.finished.is_set():
+                log.warning("Notion callback received with no active sign-in flow")
                 return 400, _page("Sign-in not in progress", "Start the Notion connection again from Escort.")
             state = params.get("state") or ""
-            if not state or not hmac.compare_digest(state.encode(), flow.state.encode()):
+            candidates = dict(flow.verifiers)
+            candidates[flow.state] = flow.verifier
+            matched_verifier: str | None = None
+            if state:
+                for candidate_state, candidate_verifier in candidates.items():
+                    if hmac.compare_digest(state.encode(), candidate_state.encode()):
+                        matched_verifier = candidate_verifier
+                        break
+            if matched_verifier is None:
+                log.warning("Notion callback rejected: state mismatch")
                 return 400, _page("Sign-in rejected", "The request did not match the sign-in Escort started (state mismatch).")
             issuer = params.get("iss")
             if issuer and issuer.rstrip("/") != str(flow.meta["issuer"]).rstrip("/"):
+                log.warning("Notion callback rejected: unexpected issuer")
                 return 400, _page("Sign-in rejected", "The response came from an unexpected server.")
             if params.get("error"):
-                self.last_error = f"Notion sign-in was not completed ({params['error']})"
+                err_code = str(params["error"])
+                self.last_error = f"Notion sign-in was not completed ({err_code})"
                 self._finish_locked(flow)
                 self.on_change()
+                log.warning("Notion callback returned OAuth error: %s", err_code)
                 return 400, _page("Notion sign-in was not completed", "You can close this tab and try again from Escort.")
             code = params.get("code") or ""
             if not code:
+                log.warning("Notion callback rejected: missing authorization code")
                 return 400, _page("Sign-in rejected", "No authorization code was returned.")
-            self._finish_locked(flow)
+            flow.verifier = matched_verifier
+            flow.finished.set()
+            if flow.timer is not None:
+                flow.timer.cancel()
+                flow.timer = None
         try:
             self.exchange_code(code, flow)
         except ConnectorError as err:
             self.last_error = str(err)
             self.on_change()
+            log.warning("Notion token exchange failed: %s", err)
             return 400, _page("Notion sign-in failed", "Escort could not finish connecting. You can close this tab and try again.")
+        finally:
+            with self._flow_lock:
+                self._finish_locked(flow)
         return 200, _page("Escort is connected to Notion", "You can close this tab and return to Escort.")
 
     # ---- tokens ----------------------------------------------------------------------
@@ -649,7 +720,7 @@ class NotionMcp:
             if tool is None:
                 return None
             payload = self.call_tool(str(tool["name"]), {})
-        except ConnectorError:
+        except Exception:
             return None
         if not isinstance(payload, dict):
             return None
@@ -658,8 +729,17 @@ class NotionMcp:
             return str(workspace["name"])
         if isinstance(workspace, str) and workspace:
             return workspace
+        bot = payload.get("bot")
+        if isinstance(bot, dict) and bot.get("workspace_name"):
+            return str(bot["workspace_name"])
+        if payload.get("workspace_name"):
+            return str(payload["workspace_name"])
         user = payload.get("user")
-        return str(user.get("name")) if isinstance(user, dict) and user.get("name") else None
+        if isinstance(user, dict) and user.get("name"):
+            return str(user["name"])
+        if payload.get("name"):
+            return str(payload["name"])
+        return None
 
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         tool = self.tool("search")
@@ -963,22 +1043,29 @@ def blocks_markdown(children: list[dict[str, Any]]) -> str:
 
 
 def _make_handler(auth: NotionMcp, path: str) -> type[BaseHTTPRequestHandler]:
+    expected_path = path.rstrip("/") or "/"
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
-            if parsed.path != path:
+            req_path = parsed.path.rstrip("/") or "/"
+            if req_path != expected_path:
                 self.send_response(404)
                 self.end_headers()
                 return
             params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items() if values}
             status, html = auth.handle_callback(params)
             body = html.encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+            except OSError:
+                pass
 
         def log_message(self, format: str, *args: Any) -> None:
             return
