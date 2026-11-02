@@ -183,6 +183,7 @@ export default function Overlay() {
   const openMainApp = useCallback(async () => {
     bridge?.releaseFocus();
     try {
+      await post("/api/main-window/show", {});
       await post("/api/overlay", { visible: false });
     } catch {
       /* ignore */
@@ -428,6 +429,7 @@ const Composer = memo(function Composer({ onAsk, busy }) {
     (e) => {
       if (e?.target instanceof Element && e.target.closest("button")) return;
       report(true);
+      inputRef.current?.focus();
       requestAnimationFrame(() => inputRef.current?.focus());
       setTimeout(() => inputRef.current?.focus(), 40);
     },
@@ -454,8 +456,14 @@ const Composer = memo(function Composer({ onAsk, busy }) {
         ref={inputRef}
         value={input}
         onChange={(e) => setInput(e.target.value)}
-        onPointerDown={focusBox}
-        onClick={focusBox}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          focusBox(e);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          focusBox(e);
+        }}
         onFocus={() => report(true)}
         onBlur={() => report(false)}
         onKeyDown={(e) => {

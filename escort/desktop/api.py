@@ -85,6 +85,11 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
             input_focus=flag("input_focus"),
         )
 
+    @app.post("/api/main-window/show")
+    def show_main_window() -> dict:
+        runtime.show_main_window()
+        return {"ok": True}
+
     @app.get("/api/monitors")
     def monitors() -> dict:
         return runtime.monitors_status(fresh=True)

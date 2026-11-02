@@ -136,7 +136,7 @@ function createWindow() {
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    focusable: false,
+    focusable: true,
     title: "Escort overlay",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -258,7 +258,6 @@ function takeFocus() {
   localFocusUntil = Date.now() + LOCAL_FOCUS_HOLD_MS;
   applied.focus = true;
   win.setIgnoreMouseEvents(false);
-  win.setFocusable(true);
   win.focus();
   win.webContents.focus();
   reapplyMouse();
@@ -272,7 +271,6 @@ function releaseFocus() {
   applied.focus = false;
   const had = win.isFocused();
   if (had) win.blur();
-  win.setFocusable(false);
   if (had) log(`Focus released (still focused after blur: ${win.isFocused()}).`);
   if (had && win.isFocused() && win.isVisible()) {
     // blur() found nothing to activate: hiding hands activation to the next
