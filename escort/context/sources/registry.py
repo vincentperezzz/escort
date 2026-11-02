@@ -13,6 +13,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -78,10 +79,11 @@ class Connectors:
         client_id_getter: Callable[[], str | None] | None = None,
         http: httpx.Client | None = None,
         open_browser: Callable[[str], Any] | None = None,
+        bundled_path: Callable[[], Path] | None = None,
     ) -> None:
         self.secrets = secrets
         self.http = http or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True)
-        self.google = GoogleAuth(secrets, self.http, client_id_getter=client_id_getter, open_browser=open_browser)
+        self.google = GoogleAuth(secrets, self.http, client_id_getter=client_id_getter, open_browser=open_browser, bundled_path=bundled_path)
         self.notion = NotionClient(secrets, self.http)
         self.generation = 0
         self.google.on_change = self._bump
@@ -112,9 +114,8 @@ class Connectors:
         configured = self.google.configured()
         if not configured:
             hint = (
-                "Create a Google Cloud OAuth client of type 'Desktop app' (Calendar + Drive APIs enabled), "
-                "then set ESCORT_GOOGLE_CLIENT_ID and ESCORT_GOOGLE_CLIENT_SECRET, or save google_client_id / "
-                "google_client_secret in Setup."
+                "Add your Google app credentials below: an OAuth client of type 'Desktop app' with the "
+                "Calendar and Drive APIs enabled."
             )
         elif connected:
             hint = "Connected. Escort reads upcoming Calendar events and Drive files (read-only)."
@@ -131,6 +132,8 @@ class Connectors:
             "account": self.google.account() if connected else None,
             "mode": self.provider_mode("google"),
             "configured": configured,
+            "credentials_source": self.google.credential_source(),
+            "has_client_secret": bool(self.google.client_secret()),
             "setup_hint": hint,
         }
 

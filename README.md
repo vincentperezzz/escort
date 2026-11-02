@@ -83,6 +83,14 @@ OAuth setup (Boss):
 1. **Notion** — Create an integration at https://www.notion.so/my-integrations, copy the internal integration secret, share target pages/databases with the integration, paste the token in Setup (saved as `notion_oauth_token`).
 2. **Google** — In Google Cloud Console create an OAuth client (Desktop app), enable Calendar API + Drive API, complete OAuth with scopes `calendar.readonly` and `drive.readonly` (and Docs export as needed), paste the access token in Setup (`google_oauth_token`). Production builds should refresh tokens; the demo accepts a pasted bearer token via Setup or `POST /api/connectors/token`.
 
+   **Google app credentials (client ID + secret).** Nothing is hardcoded. After install, open Connect accounts > Google and paste them into the "Google app credentials" form (saved via `POST /api/setup`: ID in `config.json`, secret in the Windows keyring). Precedence: env (`ESCORT_GOOGLE_CLIENT_ID` / `ESCORT_GOOGLE_CLIENT_SECRET`) > saved Setup > bundled file. To pre-provision an installer, drop a git-ignored `google_client.json` in the repo root before building (`packaging/escort.iss` ships it next to `Escort.exe` only if it exists):
+
+   ```json
+   {"client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com", "client_secret": "YOUR_CLIENT_SECRET"}
+   ```
+
+   `/api/status` only reports whether credentials are configured and their source (`env`, `setup` or `bundled`); the secret is never returned or logged.
+
 ## Run the staged demo
 
 ```bash

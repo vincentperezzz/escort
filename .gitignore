@@ -16,3 +16,6 @@ agent-tools/
 .coverage
 
 packaging/Output/
+
+# Optional local Google OAuth client for installers (never commit)
+google_client.json

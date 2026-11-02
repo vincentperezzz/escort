@@ -39,6 +39,10 @@ Type: filesandordirs; Name: "{app}\overlay"
 [Files]
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#OverlayDir}\*"; DestDir: "{app}\overlay"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Optional, git-ignored Google OAuth client (see README). Shipped only if present at build time.
+#if FileExists(AddBackslash(SourcePath) + "..\google_client.json")
+Source: "{#SourcePath}\..\google_client.json"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{group}\Escort"; Filename: "{app}\Escort.exe"

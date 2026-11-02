@@ -247,10 +247,11 @@ class DesktopRuntime:
                 os.environ["MODEL_API_KEY"] = str(body["meta_api_key"])
             for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token", "google_client_secret"):
                 if body.get(name):
-                    self.secrets.set(name, str(body[name]))
+                    value = str(body[name])
+                    self.secrets.set(name, value.strip() if name == "google_client_secret" else value)
             for key in ("mic_id", "loopback_id", "whatsapp_phone_number_id", "whatsapp_allowed_numbers", "whatsapp_graph_version", "google_client_id"):
                 if key in body:
-                    self.prefs[key] = body[key]
+                    self.prefs[key] = body[key].strip() if key == "google_client_id" and isinstance(body[key], str) else body[key]
             self._write_prefs()
         return self.public_status()
 

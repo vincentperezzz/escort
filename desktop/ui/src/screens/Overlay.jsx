@@ -134,9 +134,9 @@ function useCards(meeting) {
 }
 
 /**
- * The in-meeting overlay (#/overlay). No container: a floating control pill and,
- * below it, separate glass pieces (answer and cards, quick actions, ask capsule)
- * on a fully transparent page. Opacity is applied to the native window.
+ * The in-meeting overlay (#/overlay): three glass surfaces on a fully transparent
+ * page, with real gaps between them: the control pill, the body panel (screen
+ * line, notes, cards, answers) and the bottom container (quick actions + ask). Opacity is applied to the native window.
  */
 export default function Overlay() {
   useClickThrough();
@@ -229,17 +229,21 @@ export default function Overlay() {
 
       {!collapsed ? (
         <>
-          <div className="ov-stack -mx-2.5 -mb-2.5 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2.5 pb-5" aria-label="Escort live cards">
-            {answer ? <Answer answer={answer} onClose={closeAnswer} /> : null}
-            {conflict ? <ConflictCard card={conflict} onAct={act} acting={acting} /> : null}
-            {rest.map((card) => (
-              <MiniCard key={card.id} card={card} />
-            ))}
-            {!cards.length && !answer ? <EmptyNote offline={offline} listening={listening} /> : null}
-            <ScreenChip status={status} />
+          <section data-hit className="ov-glass ov-panel flex min-h-0 shrink flex-col rounded-[24px]" aria-label="Escort live cards">
+            <div className="ov-stack flex min-h-0 flex-col gap-2 overflow-y-auto p-2.5 pb-6">
+              <ScreenChip status={status} />
+              {answer ? <Answer answer={answer} onClose={closeAnswer} /> : null}
+              {conflict ? <ConflictCard card={conflict} onAct={act} acting={acting} /> : null}
+              {rest.map((card) => (
+                <MiniCard key={card.id} card={card} />
+              ))}
+              {!cards.length && !answer ? <EmptyNote offline={offline} listening={listening} /> : null}
+            </div>
+          </section>
+          <div data-hit className="ov-glass flex shrink-0 flex-col gap-1 rounded-[24px] p-1.5">
+            <QuickRow onAsk={ask} busy={busy} />
+            <Composer onAsk={ask} busy={busy} />
           </div>
-          <QuickRow onAsk={ask} busy={busy} />
-          <Composer onAsk={ask} busy={busy} />
         </>
       ) : null}
     </div>
@@ -383,7 +387,7 @@ const TuneBar = memo(function TuneBar({ opacity, onCommit }) {
 
 const QuickRow = memo(function QuickRow({ onAsk, busy }) {
   return (
-    <div data-hit className="ov-glass flex h-11 shrink-0 items-center gap-1 rounded-full p-1.5">
+    <div className="flex h-9 shrink-0 items-center gap-0.5 px-0.5">
       {QUICK.map(({ id, label, title, Icon, prompt }) => (
         <button
           key={id}
@@ -429,7 +433,7 @@ const Composer = memo(function Composer({ onAsk, busy }) {
   };
 
   return (
-    <form data-hit className="ov-glass ov-capsule flex h-12 shrink-0 items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5" onSubmit={submit}>
+    <form className="ov-capsule flex h-12 shrink-0 items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5" onSubmit={submit}>
       <input
         ref={inputRef}
         value={input}
@@ -465,7 +469,7 @@ const Composer = memo(function Composer({ onAsk, busy }) {
 
 const EmptyNote = memo(function EmptyNote({ offline, listening }) {
   return (
-    <p data-hit className="ov-glass rounded-[20px] px-4 py-3.5 text-[13px] leading-relaxed text-muted">
+    <p className="ov-tile rounded-[18px] px-4 py-3.5 text-[13px] leading-relaxed text-muted">
       {offline ? "Can't reach Escort. Retrying." : listening ? "Listening. Cards land here when a line crosses your notes." : "Press play to start listening."}
     </p>
   );
@@ -475,7 +479,7 @@ function ScreenChip({ status }) {
   if (!status?.screen && !status?.capture_error) return null;
   if (!status?.listening && !status?.capture_error && !status?.screen?.monitoring) return null;
   return (
-    <div data-hit className="ov-glass self-start rounded-full px-3 py-1.5">
+    <div className="ov-tile self-start rounded-full px-3 py-1.5">
       <ScreenLine status={status} />
     </div>
   );
@@ -483,7 +487,7 @@ function ScreenChip({ status }) {
 
 const ConflictCard = memo(function ConflictCard({ card, onAct, acting }) {
   return (
-    <article data-hit className="ov-glass-conflict rise shrink-0 rounded-[22px] p-4">
+    <article className="ov-tile-conflict rise shrink-0 rounded-[18px] p-4">
       <p className="flex items-center justify-between gap-2 text-[11.5px] font-medium">
         <span className="inline-flex min-w-0 items-center gap-1.5 text-conflict">
           <KIND.conflict.Icon size={14} aria-hidden />
@@ -517,7 +521,7 @@ const MiniCard = memo(function MiniCard({ card }) {
   const k = KIND[kindOf(card.type)];
   const { Icon } = k;
   return (
-    <article data-hit className="ov-glass rise shrink-0 rounded-[20px] px-4 py-3">
+    <article className="ov-tile rise shrink-0 rounded-[18px] px-4 py-3">
       <p className="flex items-center justify-between gap-2 text-[11.5px]">
         <span className={`inline-flex items-center gap-1.5 font-medium ${k.text}`}>
           <Icon size={13} aria-hidden />
@@ -533,7 +537,7 @@ const MiniCard = memo(function MiniCard({ card }) {
 
 const Answer = memo(function Answer({ answer, onClose }) {
   return (
-    <article data-hit className="ov-glass-answer rise shrink-0 rounded-[20px] px-4 py-3" aria-live="polite">
+    <article className="ov-tile-answer rise shrink-0 rounded-[18px] px-4 py-3" aria-live="polite">
       <p className="flex items-center justify-between gap-2 text-[11.5px] font-medium text-[#c6bfff]">
         {answer.label}
         <button type="button" onClick={onClose} aria-label="Dismiss answer" className="press -mr-1.5 grid h-6 w-6 place-items-center rounded-full text-[#c6bfff]/80 hover:bg-white/10 hover:text-ink">

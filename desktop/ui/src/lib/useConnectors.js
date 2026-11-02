@@ -99,6 +99,27 @@ export function useConnectors({ onChange } = {}) {
     }
   }, [poll]);
 
+  const saveGoogleCredentials = useCallback(
+    async ({ clientId, clientSecret }) => {
+      setFlag(setErrors, "google");
+      setFlag(setBusy, "google", "saving");
+      try {
+        const body = {};
+        if (clientId.trim()) body.google_client_id = clientId.trim();
+        if (clientSecret.trim()) body.google_client_secret = clientSecret.trim();
+        await post("/api/setup", body);
+        await load();
+        return true;
+      } catch (err) {
+        setFlag(setErrors, "google", err.message || "Could not save the Google app credentials.");
+        return false;
+      } finally {
+        setFlag(setBusy, "google");
+      }
+    },
+    [load],
+  );
+
   const connectNotion = useCallback(
     async (token) => {
       setFlag(setErrors, "notion");
@@ -146,5 +167,5 @@ export function useConnectors({ onChange } = {}) {
     [stopPolling],
   );
 
-  return { providers, unavailable, busy, errors, authUrls, connectGoogle, connectNotion, disconnect, cancelWait, reload: load };
+  return { providers, unavailable, busy, errors, authUrls, connectGoogle, saveGoogleCredentials, connectNotion, disconnect, cancelWait, reload: load };
 }

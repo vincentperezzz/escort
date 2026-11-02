@@ -250,9 +250,9 @@ def test_loopback_server_completes_real_redirect():
 
 def test_connect_requires_client_id():
     secrets = MemorySecretStore()
-    connectors = Connectors(secrets, http=httpx.Client(transport=httpx.MockTransport(FakeGoogle())))
+    connectors = Connectors(secrets, http=httpx.Client(transport=httpx.MockTransport(FakeGoogle())), bundled_path=lambda: Path("missing-google-client.json"))
     row = connectors.status()["providers"][0]
-    assert row["configured"] is False and "ESCORT_GOOGLE_CLIENT_ID" in row["setup_hint"]
+    assert row["configured"] is False and "Google app credentials" in row["setup_hint"]
     with pytest.raises(ConnectorSetupError):
         connectors.connect_google()
 
@@ -442,7 +442,8 @@ def test_status_contract_and_no_token_leak(tmp_path: Path):
     status = client.get("/api/connectors/status").json()
     assert [row["id"] for row in status["providers"]] == ["google", "notion"]
     for row in status["providers"]:
-        assert set(row) == {"id", "label", "connected", "account", "mode", "configured", "setup_hint"}
+        assert {"id", "label", "connected", "account", "mode", "configured", "setup_hint"} <= set(row)
+        assert set(row) - {"id", "label", "connected", "account", "mode", "configured", "setup_hint"} <= {"credentials_source", "has_client_secret"}
     google = status["providers"][0]
     assert google["connected"] is True and google["account"] == "me@example.com" and google["mode"] == "live" and google["configured"] is True
     notion = status["providers"][1]

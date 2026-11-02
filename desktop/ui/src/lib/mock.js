@@ -134,7 +134,7 @@ function mockSettingsReply(message) {
 }
 
 const providers = [
-  { id: "google", label: "Google", connected: false, account: "", mode: "mock", configured: true, setup_hint: "" },
+  { id: "google", label: "Google", connected: false, account: "", mode: "mock", configured: params.get("google") !== "missing", credentials_source: params.get("google") === "missing" ? null : "setup", has_client_secret: params.get("google") !== "missing", setup_hint: "" },
   { id: "notion", label: "Notion", connected: true, account: "BayaniPay workspace", mode: "mock", configured: true, setup_hint: "" },
 ];
 
@@ -221,6 +221,15 @@ export async function handle(path, options = {}) {
   }
   if (path.startsWith("/api/cards/")) {
     if (body.action === "ignore") state.meeting.cards = state.meeting.cards.filter((c) => !path.includes(`/${c.id}/`));
+    return status();
+  }
+  if (path === "/api/setup") {
+    const g = providers[0];
+    if (body.google_client_id) {
+      g.configured = true;
+      g.credentials_source = "setup";
+    }
+    if (body.google_client_secret) g.has_client_secret = true;
     return status();
   }
   if (path === "/api/connectors/status") return { providers };

@@ -10,8 +10,10 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets as stdlib_secrets
+import sys
 import threading
 import time
 import urllib.parse
@@ -19,6 +21,7 @@ import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -28,6 +31,9 @@ from escort.context.sources.base import (
     ConnectorError,
     ConnectorSetupError,
 )
+from escort.paths import repo_root
+
+log = logging.getLogger("escort.google")
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -38,6 +44,14 @@ SCOPES = (
     "https://www.googleapis.com/auth/drive.readonly",
 )
 TOKEN_KEY = "google_oauth_token"
+BUNDLED_FILE = "google_client.json"
+
+
+def bundled_client_path() -> Path:
+    """google_client.json: next to Escort.exe when installed, in the repo root in dev."""
+    base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else repo_root()
+    return base / BUNDLED_FILE
+
 CLIENT_SECRET_KEY = "google_client_secret"
 PROVIDER = "google"
 FLOW_TIMEOUT_S = 300.0
@@ -77,7 +91,9 @@ class GoogleAuth:
         client_id_getter: Callable[[], str | None] | None = None,
         open_browser: Callable[[str], Any] | None = None,
         clock: Callable[[], float] = time.time,
+        bundled_path: Callable[[], Path] | None = None,
     ) -> None:
+        self._bundled_path = bundled_path or (lambda: bundled_client_path())
         self.secrets = secrets
         self.http = http
         self._client_id_getter = client_id_getter or (lambda: None)
@@ -89,12 +105,47 @@ class GoogleAuth:
         self.on_change: Callable[[], None] = lambda: None
 
     # ---- configuration -------------------------------------------------
+    def _bundled(self) -> tuple[str, str]:
+        """(client_id, client_secret) from the optional installer-supplied file; never logged."""
+        try:
+            data = json.loads(self._bundled_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "", ""
+        if not isinstance(data, dict):
+            return "", ""
+        return str(data.get("client_id") or "").strip(), str(data.get("client_secret") or "").strip()
+
+    def credential_source(self) -> str | None:
+        """Where the client credentials come from: env > saved Setup > bundled file."""
+        if (os.environ.get("ESCORT_GOOGLE_CLIENT_ID") or "").strip():
+            return "env"
+        if (self._client_id_getter() or "").strip():
+            return "setup"
+        if self._bundled()[0]:
+            return "bundled"
+        return None
+
     def client_id(self) -> str | None:
-        value = os.environ.get("ESCORT_GOOGLE_CLIENT_ID") or self._client_id_getter() or ""
+        source = self.credential_source()
+        if source == "env":
+            value = os.environ.get("ESCORT_GOOGLE_CLIENT_ID", "")
+        elif source == "setup":
+            value = self._client_id_getter() or ""
+        elif source == "bundled":
+            value = self._bundled()[0]
+        else:
+            value = ""
         return value.strip() or None
 
     def client_secret(self) -> str | None:
-        value = os.environ.get("ESCORT_GOOGLE_CLIENT_SECRET") or self.secrets.get(CLIENT_SECRET_KEY) or ""
+        # The secret always comes from the same source as the id, so two apps never get mixed.
+        source = self.credential_source()
+        if source == "bundled":
+            value = self._bundled()[1]
+        elif source in ("env", "setup"):
+            value = os.environ.get("ESCORT_GOOGLE_CLIENT_SECRET") or self.secrets.get(CLIENT_SECRET_KEY) or ""
+        else:
+            value = ""
         return value.strip() or None
 
     def configured(self) -> bool:

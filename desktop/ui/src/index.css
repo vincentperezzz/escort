@@ -110,37 +110,27 @@ html.overlay-mode body {
     0 1px 3px -1px rgba(0, 0, 0, 0.45);
 }
 
-.ov-glass-conflict {
-  background:
-    linear-gradient(180deg, rgba(255, 106, 85, 0.13), rgba(255, 106, 85, 0.05) 70%),
-    rgba(18, 11, 13, 0.92);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 180, 168, 0.14),
-    inset 0 0 0 1px rgba(255, 106, 85, 0.32),
-    0 8px 22px -12px rgba(0, 0, 0, 0.6),
-    0 1px 3px -1px rgba(0, 0, 0, 0.45);
+/* Items inside the body panel are flat tints on the panel, never surfaces of their own. */
+.ov-tile {
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
 }
-
-.ov-glass-answer {
-  background:
-    linear-gradient(180deg, rgba(139, 124, 255, 0.14), rgba(139, 124, 255, 0.05) 70%),
-    rgba(13, 12, 22, 0.92);
-  box-shadow:
-    inset 0 1px 0 rgba(198, 191, 255, 0.14),
-    inset 0 0 0 1px rgba(139, 124, 255, 0.3),
-    0 8px 22px -12px rgba(0, 0, 0, 0.6),
-    0 1px 3px -1px rgba(0, 0, 0, 0.45);
+.ov-tile-conflict {
+  background: linear-gradient(180deg, rgba(255, 106, 85, 0.14), rgba(255, 106, 85, 0.06));
+  box-shadow: inset 0 0 0 1px rgba(255, 106, 85, 0.32);
+}
+.ov-tile-answer {
+  background: linear-gradient(180deg, rgba(139, 124, 255, 0.15), rgba(139, 124, 255, 0.06));
+  box-shadow: inset 0 0 0 1px rgba(139, 124, 255, 0.3);
 }
 
 .ov-capsule {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   transition: box-shadow 300ms var(--ease);
 }
 .ov-capsule:focus-within {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 0 0 1px rgba(139, 124, 255, 0.55),
-    0 8px 22px -12px rgba(0, 0, 0, 0.6),
-    0 1px 3px -1px rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(139, 124, 255, 0.6);
 }
 
 /*
@@ -157,8 +147,8 @@ html.overlay-mode * {
   scrollbar-width: none;
   overscroll-behavior: contain;
   /* A card that runs past the bottom dissolves instead of being cut by the quick actions. */
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
 }
 .ov-stack::-webkit-scrollbar {
   display: none;
