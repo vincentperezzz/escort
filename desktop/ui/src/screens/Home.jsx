@@ -84,6 +84,9 @@ function Hero({ className, listening, elapsed, overlay, toggle, starting, disabl
             <Button variant="secondary" size="lg" onClick={() => go("live")} trailing={<ArrowUpRight size={18} />}>
               Open live view
             </Button>
+            <Button variant="ghost" size="lg" onClick={() => post("/api/overlay", { visible: true }).catch(() => {})} trailing={<ArrowUpRight size={18} />}>
+              Back to overlay
+            </Button>
           </>
         ) : (
           <button
@@ -191,7 +194,7 @@ function PrepChat({ className, go }) {
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Ask Muse anything…"
+          placeholder="Ask Escort AI anything…"
           aria-label="Ask prep chat"
           className="h-9 min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-faint"
         />

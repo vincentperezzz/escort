@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, CalendarBlank, FileText, Plus } from "@phosphor-icons/react";
 import Logo from "../components/Logo.jsx";
 import ChangedChips from "../components/ChangedChips.jsx";
+import FormattedText from "../components/FormattedText.jsx";
 import { post, formatEventWhen } from "../lib/api.js";
 
 const SUGGESTIONS = [
@@ -65,7 +66,7 @@ export default function Chat({ status, refresh, go, seed = "" }) {
     } catch (err) {
       setLocal(null);
       setInput(message);
-      setError(`Muse didn't answer (${err.message || "no response"}). Your message is back in the box; try again.`);
+      setError(`Escort AI didn't answer (${err.message || "no response"}). Your message is back in the box; try again.`);
     } finally {
       setPending(false);
     }
@@ -103,7 +104,7 @@ export default function Chat({ status, refresh, go, seed = "" }) {
             </p>
           ) : (
             <p className="mt-3 px-2 text-center text-[12px] text-faint">
-              Muse uses your loaded notes, live call transcript, and screen. Enter to send, Shift+Enter for a new line.
+              Escort AI uses your loaded notes, live call transcript, and screen. Enter to send, Shift+Enter for a new line.
             </p>
           )}
         </div>
@@ -204,8 +205,8 @@ function Composer({ value, onChange, onSend, pending }) {
               onSend();
             }
           }}
-          placeholder="Ask Muse about this meeting…"
-          aria-label="Message Muse"
+          placeholder="Ask Escort AI about this meeting…"
+          aria-label="Message Escort AI"
           className="scroll-thin max-h-[180px] min-h-[24px] flex-1 resize-none bg-transparent py-2 text-[15px] leading-6 outline-none placeholder:text-faint focus-visible:outline-none"
         />
         <button
@@ -235,7 +236,7 @@ function Message({ turn, stream, onGrow }) {
     <li className="rise flex gap-3.5">
       <Logo size={26} className="mt-0.5" />
       <div className="min-w-0 flex-1 pt-0.5">
-        <p className="mb-1.5 text-[12.5px] font-medium text-muted">Muse</p>
+        <p className="mb-1.5 text-[12.5px] font-medium text-muted">Escort AI</p>
         <StreamText text={turn.content || ""} stream={stream} onGrow={onGrow} />
         <ChangedChips changed={turn.changed} className="mt-3" />
       </div>
@@ -262,21 +263,19 @@ function StreamText({ text, stream, onGrow }) {
   }, [shown, done, onGrow]);
 
   const visible = done ? text : words.slice(0, shown).join("");
+  const cursor = !done ? <span className="ml-0.5 inline-block h-4 w-[2px] translate-y-[3px] rounded-full bg-accent" aria-hidden /> : null;
   return (
-    <div className="space-y-3 text-[15px] leading-7 text-ink/90 text-pretty">
-      {visible.split(/\n{2,}/).map((para, i, arr) => (
-        <p key={i} className="whitespace-pre-wrap">
-          {para}
-          {!done && i === arr.length - 1 ? <span className="ml-0.5 inline-block h-4 w-[2px] translate-y-[3px] rounded-full bg-accent" aria-hidden /> : null}
-        </p>
-      ))}
-    </div>
+    <FormattedText
+      text={visible}
+      cursor={cursor}
+      className="space-y-3 text-[15px] leading-7 text-ink/90 text-pretty"
+    />
   );
 }
 
 function Thinking() {
   return (
-    <li className="fade-in flex items-center gap-3.5" role="status" aria-label="Muse is thinking">
+    <li className="fade-in flex items-center gap-3.5" role="status" aria-label="Escort AI is thinking">
       <Logo size={26} />
       <span className="thinking flex gap-1.5">
         <span className="h-1.5 w-1.5 rounded-full bg-accent" />

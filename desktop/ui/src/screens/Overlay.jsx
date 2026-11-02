@@ -4,6 +4,7 @@ import Logo from "../components/Logo.jsx";
 import { api, post, mmss } from "../lib/api.js";
 import ScreenLine from "../components/ScreenLine.jsx";
 import ChangedChips from "../components/ChangedChips.jsx";
+import FormattedText from "../components/FormattedText.jsx";
 import { useOverlay } from "../lib/useOverlay.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
@@ -173,11 +174,22 @@ export default function Overlay() {
           reloadOverlay();
         }
       } catch (err) {
-        setAnswer({ label, error: `Muse didn't answer (${err.message || "no response"}).` });
+        setAnswer({ label, error: `Escort AI didn't answer (${err.message || "no response"}).` });
       }
     },
     [refresh, reloadOverlay],
   );
+
+  const openMainApp = useCallback(async () => {
+    bridge?.releaseFocus();
+    try {
+      await post("/api/overlay", { visible: false });
+    } catch {
+      /* ignore */
+    } finally {
+      reloadOverlay();
+    }
+  }, [reloadOverlay]);
 
   const closeAnswer = useCallback(() => setAnswer(null), []);
   const toggleTuning = useCallback(() => setTuning((v) => !v), []);
@@ -198,6 +210,7 @@ export default function Overlay() {
         onTune={toggleTuning}
         onToggle={toggleCollapsed}
         onListen={toggleListen}
+        onOpenApp={openMainApp}
       />
 
       {!collapsed && tuning ? <TuneBar opacity={opacity} onCommit={commitOpacity} /> : null}
@@ -234,7 +247,7 @@ const Clock = memo(function Clock({ listening, startedAt }) {
   );
 });
 
-const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, count, open, tuning, onTune, onToggle, onListen }) {
+const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, count, open, tuning, onTune, onToggle, onListen, onOpenApp }) {
   const drag = useWindowDrag();
   return (
     <div
@@ -243,7 +256,16 @@ const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, co
       className={`ov-glass flex h-12 shrink-0 items-center gap-1.5 rounded-full py-1.5 pl-2 pr-1.5 ${drag.onPointerDown ? "cursor-grab active:cursor-grabbing" : ""}`}
       title={hint || undefined}
     >
-      <Logo state={listening ? "live" : "idle"} size={32} />
+      <button
+        type="button"
+        onClick={onOpenApp}
+        onPointerDown={(e) => e.stopPropagation()}
+        aria-label="Open Escort window"
+        title="Open Escort window"
+        className="press shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <Logo state={listening ? "live" : "idle"} size={32} />
+      </button>
       <div className="flex min-w-0 flex-1 items-baseline gap-2 pl-1.5">
         {listening ? <Clock listening={listening} startedAt={startedAt} /> : <span className="shrink-0 text-[13px] font-medium text-muted">{offline ? "Escort offline" : "Ready"}</span>}
         {title && listening ? <span className="truncate text-[12px] text-faint">{title}</span> : null}
@@ -445,8 +467,8 @@ const Composer = memo(function Composer({ onAsk, busy }) {
             if (!busy) onAsk(QUICK[0].label, QUICK[0].prompt);
           }
         }}
-        placeholder="Ask Muse…"
-        aria-label="Ask Muse"
+        placeholder="Ask Escort AI…"
+        aria-label="Ask Escort AI"
         autoComplete="off"
         className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint focus-visible:outline-none"
       />
@@ -540,7 +562,7 @@ const Answer = memo(function Answer({ answer, onClose }) {
         </button>
       </p>
       {answer.pending ? (
-        <span className="thinking mt-2 flex gap-1.5" role="status" aria-label="Muse is thinking">
+        <span className="thinking mt-2 flex gap-1.5" role="status" aria-label="Escort AI is thinking">
           <span className="h-1.5 w-1.5 rounded-full bg-accent" />
           <span className="h-1.5 w-1.5 rounded-full bg-accent" />
           <span className="h-1.5 w-1.5 rounded-full bg-accent" />
@@ -549,7 +571,7 @@ const Answer = memo(function Answer({ answer, onClose }) {
         <p className="mt-1 text-[13px] text-conflict">{answer.error}</p>
       ) : (
         <>
-          <p className="mt-1 select-text whitespace-pre-wrap text-[13px] leading-relaxed text-ink/90">{answer.text}</p>
+          <FormattedText text={answer.text} className="mt-1 select-text space-y-1.5 text-[13px] leading-relaxed text-ink/90" />
           <ChangedChips changed={answer.changed} className="mt-2" />
         </>
       )}

@@ -147,6 +147,7 @@ class NotionMcp:
         self._rpc_id = 0
         self.last_error: str | None = None
         self.on_change: Callable[[], None] = lambda: None
+        self.on_connected: Callable[[], None] = lambda: None
 
     # ---- stored state ---------------------------------------------------------------
     def _load_json(self, key: str) -> dict[str, Any] | None:
@@ -325,7 +326,6 @@ class NotionMcp:
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
-            "prompt": "consent",
             "resource": meta["resource"],
         }
         joiner = "&" if "?" in meta["authorization_endpoint"] else "?"
@@ -547,6 +547,10 @@ class NotionMcp:
                     self._save_tokens({**current, "account": name})
         log.info("Connected Notion through MCP")
         self.on_change()
+        try:
+            self.on_connected()
+        except Exception:
+            pass
         return data
 
     def access_token(self, force_refresh: bool = False) -> str:
@@ -1049,11 +1053,11 @@ def _make_handler(auth: NotionMcp, path: str) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
             req_path = parsed.path.rstrip("/") or "/"
-            if req_path != expected_path:
+            params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items() if values}
+            if req_path != expected_path and "code" not in params and "error" not in params:
                 self.send_response(404)
                 self.end_headers()
                 return
-            params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items() if values}
             status, html = auth.handle_callback(params)
             body = html.encode("utf-8")
             try:

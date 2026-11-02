@@ -203,21 +203,19 @@ function ProviderCard({ provider, ctl }) {
           </>
         ) : (
           <>
-            <Button variant="primary" disabled={Boolean(busy)} onClick={ctl.connectNotionOAuth}>
+            <Button variant="primary" disabled={busy === "connecting"} onClick={ctl.connectNotionOAuth}>
               <NotionMark size={16} />
               {busy === "connecting"
                 ? "Opening Notion…"
                 : busy === "waiting"
-                  ? "Waiting for Notion…"
+                  ? "Open Notion again"
                   : reconnect
                     ? "Reconnect Notion"
                     : "Connect Notion"}
             </Button>
             {busy === "waiting" ? (
               <div className="flex items-center gap-3 text-xs">
-                <button type="button" className={`inline-flex items-center gap-1 ${LINK}`} onClick={ctl.connectNotionOAuth}>
-                  Open Notion again <ArrowSquareOut size={14} aria-hidden />
-                </button>
+                <span className="text-muted">Waiting for Notion…</span>
                 <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
                   Cancel
                 </button>
@@ -266,10 +264,10 @@ function ProviderCard({ provider, ctl }) {
       ) : null}
 
       {busy === "waiting" && !provider.connected ? (
-        <p className="mt-3 text-xs text-muted" role="status">
+        <p className="mt-3 text-xs leading-relaxed text-muted" role="status">
           {isGoogle
             ? "Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes."
-            : "In Notion, choose the pages Escort can see and allow access. Escort notices on its own."}
+            : "In Notion, choose the pages Escort can see and allow access. If signing in took you to your Notion workspace homepage first, click Open Notion again above now that you're signed in—it will go straight to the Allow access screen and return to Escort."}
         </p>
       ) : null}
       {error ? (

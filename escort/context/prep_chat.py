@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ def prep_chat(
     cfg = settings or load_settings()
     if not cfg.api_key:
         return (
-            "Set MODEL_API_KEY in Settings first so Muse can answer. "
+            "Set MODEL_API_KEY in Settings first so Escort AI can answer. "
             "Once added, you can ask about your meeting, notes, live transcript, or how to respond."
         )
     model_id = spark_model_name(cfg.spark_model)
@@ -48,7 +49,8 @@ def prep_chat(
     prompt = "\n\n".join(sections)
 
     system = (
-        "You are Muse, the intelligent AI meeting copilot inside Escort (a desktop copilot for live and pre-meeting client calls).\n"
+        "You are Escort AI, the intelligent AI meeting copilot inside Escort (a desktop copilot for live and pre-meeting client calls). "
+        "When greeting the user or introducing yourself, introduce yourself as Escort AI (e.g., 'Hi — I'm Escort AI, your meeting copilot.').\n"
         f"Runtime & model identity: You run on Meta Muse Spark ({model_id}), paired with Muse Voice Transcribe "
         f"({cfg.asr_model}) for real-time speech-to-text (Me = user's microphone, Them = remote call audio) "
         f"and SAM 3.1 ({cfg.sam_model}) for visual screen grounding.\n\n"
@@ -99,29 +101,42 @@ def prep_chat(
     client = http or httpx.Client(timeout=60)
     owns = http is None
     try:
-        response = client.post(
-            f"{cfg.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_id,
-                "reasoning_effort": "minimal",
-                "max_completion_tokens": 1600,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_content},
-                ],
-            },
-        )
+        last_err: Exception | None = None
+        response: httpx.Response | None = None
+        for attempt in range(3):
+            try:
+                response = client.post(
+                    f"{cfg.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cfg.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "reasoning_effort": "minimal",
+                        "max_completion_tokens": 1600,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user_content},
+                        ],
+                    },
+                )
+                break
+            except httpx.TransportError as err:
+                last_err = err
+                if attempt < 2:
+                    time.sleep(0.35 * (attempt + 1))
+        if response is None:
+            raise last_err or RuntimeError("Network request failed")
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
         if isinstance(content, list):
             content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
-        return str(content).strip() or "No response from Muse."
+        return str(content).strip() or "No response from Escort AI."
+    except httpx.TransportError as err:
+        return f"Escort AI couldn't reach the model server ({err}). Check your internet connection and try again."
     except Exception as err:
-        return f"Muse is quiet right now ({err}). Try again after checking the API key."
+        return f"Escort AI is quiet right now ({err}). Try again after checking the API key."
     finally:
         if owns:
             client.close()

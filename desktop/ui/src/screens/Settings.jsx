@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { SlidersHorizontal, Plugs, Keyboard, Microphone, ShieldCheck } from "@phosphor-icons/react";
+import { SlidersHorizontal, Plugs, Keyboard, Microphone, ShieldCheck, CheckCircle } from "@phosphor-icons/react";
 import { Bezel, Button, Field, Kbd, Pill, Select, Toggle } from "../components/ui.jsx";
 import ConnectAccounts from "../components/ConnectAccounts.jsx";
 import { post } from "../lib/api.js";
@@ -240,13 +240,20 @@ function SaveBar({ setup, label = "Save" }) {
 
 function Connections({ status, refresh, setup }) {
   const { form, set } = setup;
+  const keySaved = Boolean(status?.has_meta_key);
   return (
     <>
       <Bezel size="sm" coreClassName="p-6">
         <ConnectAccounts onChange={refresh} />
       </Bezel>
       <form onSubmit={setup.submit} className="space-y-5">
-        <Group title="Muse" hint="The model that writes your cards. Your key stays on this machine, stored securely in your OS keychain and never hardcoded.">
+        <Group title="Escort AI" hint="The model that writes your cards and powers chat. Your key stays on this machine, stored securely in your OS keychain and never hardcoded.">
+          {keySaved ? (
+            <p className="flex items-center gap-2 px-5 pt-3 text-sm text-commit" role="status">
+              <CheckCircle size={17} weight="regular" aria-hidden />
+              <span>API key saved on this machine</span>
+            </p>
+          ) : null}
           <div className="px-5 pb-2 pt-3">
             <Field
               label="Meta API key"
@@ -254,10 +261,10 @@ function Connections({ status, refresh, setup }) {
               autoComplete="off"
               value={form.meta_api_key}
               onChange={set("meta_api_key")}
-              placeholder={status?.has_meta_key ? "Saved in keychain" : "LLM_..."}
+              placeholder={keySaved ? "Saved in keychain · paste a new key to replace it" : "LLM_..."}
             />
           </div>
-          <SaveBar setup={setup} label="Save key" />
+          <SaveBar setup={setup} label={keySaved ? "Update key" : "Save key"} />
         </Group>
         <Group title="WhatsApp demo" hint="Hackathon allowlist only, not a production rollout.">
           <div className="grid gap-4 px-5 pb-2 pt-3 sm:grid-cols-2">

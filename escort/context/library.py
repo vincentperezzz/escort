@@ -38,6 +38,23 @@ class ContextLibrary:
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             self.data = {"items": [], "prep": {}, "chat": []}
+        chat = self.data.get("chat")
+        if isinstance(chat, list):
+            cleaned = [
+                turn
+                for turn in chat
+                if not (
+                    isinstance(turn, dict)
+                    and turn.get("role") == "assistant"
+                    and (
+                        "[Errno 11001]" in str(turn.get("content") or "")
+                        or "getaddrinfo failed" in str(turn.get("content") or "")
+                    )
+                )
+            ]
+            if len(cleaned) != len(chat):
+                self.data["chat"] = cleaned
+                self._save()
 
     def _save(self) -> None:
         self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")

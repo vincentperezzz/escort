@@ -303,7 +303,7 @@ def test_auth_url_has_pkce_state_consent_and_loopback_redirect():
         params = _params(url)
         assert params["response_type"] == "code" and params["client_id"] == "client-1"
         assert params["code_challenge_method"] == "S256" and len(params["code_challenge"]) == 43
-        assert params["prompt"] == "consent" and params["resource"] == MCP and len(params["state"]) >= 40
+        assert params["resource"] == MCP and len(params["state"]) >= 40
         redirect = urllib.parse.urlsplit(params["redirect_uri"])
         assert redirect.scheme == "http" and redirect.hostname == "127.0.0.1" and redirect.path == "/callback" and redirect.port
         reg = fake.registrations[0]

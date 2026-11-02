@@ -124,7 +124,7 @@ REFRESH_SKEW_S = 60.0
 
 CLOSE_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Escort</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#222}}</style>
-</head><body><h1>{title}</h1><p>{body}</p></body></html>"""
+</head><body><h1>{title}</h1><p>{body}</p><script>try{{window.close();}}catch(e){{}}</script></body></html>"""
 
 
 def pkce_pair() -> tuple[str, str]:
@@ -173,6 +173,7 @@ class GoogleAuth:
         self._flow: PendingFlow | None = None
         self.last_error: str | None = None
         self.on_change: Callable[[], None] = lambda: None
+        self.on_connected: Callable[[], None] = lambda: None
 
     # ---- configuration -------------------------------------------------
     @staticmethod
@@ -458,6 +459,10 @@ class GoogleAuth:
         except ConnectorError as err:
             self.last_error = str(err)
             return 400, _page("Google sign-in failed", "Escort could not finish connecting. You can close this tab and try again.")
+        try:
+            self.on_connected()
+        except Exception:
+            pass
         notes_flow = flow.capability == "notes"
         if notes_flow and not self.has_scopes(flow.scopes):
             self.last_error = "Google did not grant note saving; tick both boxes on Google's consent screen"

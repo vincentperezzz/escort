@@ -221,14 +221,27 @@ class MuseSpark:
             trigger=trigger,
             frame=frame,
         )
-        response = self._client.post(
-            f"{self.settings.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.settings.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=request,
-        )
+        last_err: Exception | None = None
+        response: httpx.Response | None = None
+        for attempt in range(3):
+            try:
+                response = self._client.post(
+                    f"{self.settings.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.settings.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=request,
+                )
+                break
+            except httpx.TransportError as err:
+                last_err = err
+                if attempt < 2:
+                    import time
+
+                    time.sleep(0.35 * (attempt + 1))
+        if response is None:
+            raise last_err or SparkError("Network request failed")
         response.raise_for_status()
         return parse_spark_response(response.json())
 

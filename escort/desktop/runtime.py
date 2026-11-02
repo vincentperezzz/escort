@@ -121,6 +121,8 @@ class DesktopRuntime:
             os.environ["MODEL_API_KEY"] = key
         self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
         self.connectors.save_notes_getter = lambda: self.save_notes_enabled
+        self.connectors.google.on_connected = self.show_main_window
+        self.connectors.notion_mcp.on_connected = self.show_main_window
         self.notes = GoogleNotes(self.connectors.google, DictNotesState(self.prefs, on_change=self._write_prefs))
         self.notion_notes = NotionNotes(self.connectors.notion, NotionNotesState(self.prefs, on_change=self._write_prefs), mcp=self.connectors.notion_mcp)
         self.connectors.notion_notes_getter = self._notion_notes_view
@@ -262,8 +264,10 @@ class DesktopRuntime:
     def save_setup(self, body: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             if body.get("meta_api_key"):
-                self.secrets.set("meta_api_key", str(body["meta_api_key"]))
-                os.environ["MODEL_API_KEY"] = str(body["meta_api_key"])
+                clean_key = str(body["meta_api_key"]).strip()
+                if clean_key:
+                    self.secrets.set("meta_api_key", clean_key)
+                    os.environ["MODEL_API_KEY"] = clean_key
             for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token", "google_client_secret", "google_api_key"):
                 if body.get(name):
                     value = str(body[name])

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IconContext, House, Sparkle, Waveform, FileText, ListChecks, GearSix } from "@phosphor-icons/react";
+import { IconContext, House, Sparkle, Waveform, FileText, ListChecks, GearSix, ArrowSquareOut } from "@phosphor-icons/react";
 import { api, post } from "./lib/api.js";
 import Logo, { logoSvg } from "./components/Logo.jsx";
 import Home from "./screens/Home.jsx";
@@ -92,6 +92,16 @@ function Shell({ route }) {
     [refresh],
   );
 
+  const openOverlay = useCallback(async () => {
+    try {
+      await post("/api/overlay", { visible: true });
+    } catch {
+      /* overlay endpoint not available in this build */
+    } finally {
+      refresh();
+    }
+  }, [refresh]);
+
   // Ctrl+Shift+E shows or hides the overlay. The backend registers it system-wide
   // (which swallows the keystroke); this only fires if that registration failed.
   useEffect(() => {
@@ -168,6 +178,21 @@ function Shell({ route }) {
               </button>
             );
           })}
+          {listening ? (
+            <>
+              <span className="mx-1 hidden h-5 w-px bg-white/10 sm:block" aria-hidden />
+              <button
+                type="button"
+                onClick={openOverlay}
+                aria-label="Back to overlay"
+                title="Switch back to the live overlay (Ctrl+Shift+E)"
+                className="press flex h-9 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[12.5px] font-medium text-[#c6bfff] hover:bg-accent/30 hover:text-white"
+              >
+                <ArrowSquareOut size={15} weight="regular" aria-hidden />
+                <span className="hidden sm:inline">Back to overlay</span>
+              </button>
+            </>
+          ) : null}
         </nav>
       </header>
 
