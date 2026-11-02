@@ -247,8 +247,9 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
         return runtime.notion_update_cancel(str(body.get("plan_id") or ""))
 
     @app.post("/api/connectors/notion/connect")
-    def connect_notion(body: dict) -> dict:
-        return runtime.connect_notion(str(body.get("token") or ""))
+    def connect_notion(body: dict | None = Body(default=None)) -> dict:
+        """No body: one-click OAuth, returns {auth_url} (poll /api/connectors/status). {token}: Advanced token fallback."""
+        return runtime.connect_notion(str((body or {}).get("token") or ""))
 
     @app.post("/api/connectors/{provider}/disconnect", response_model=None)
     def disconnect(provider: str) -> dict | JSONResponse:

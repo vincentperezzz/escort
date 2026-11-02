@@ -4,12 +4,10 @@ import {
   CaretDown,
   CheckCircle,
   FileText,
-  GoogleLogo,
   MagnifyingGlass,
-  NotionLogo,
-  Plugs,
   ShieldCheck,
 } from "@phosphor-icons/react";
+import { BrandTile, GoogleMark, NotionMark } from "./BrandMark.jsx";
 import { Button, Pill, Toggle } from "./ui.jsx";
 import { post } from "../lib/api.js";
 import { useConnectors } from "../lib/useConnectors.js";
@@ -18,7 +16,7 @@ const META = {
   google: {
     name: "Google",
     scope: "Calendar + Docs, Sheets, Slides, Drive picks",
-    Icon: GoogleLogo,
+    Mark: GoogleMark,
     blurb: "Connect your own account. Reads your upcoming calls, the Google links you paste, and the Drive files you pick.",
     // Shown until Google app credentials are saved.
     setupSteps: [
@@ -37,14 +35,13 @@ const META = {
   },
   notion: {
     name: "Notion",
-    scope: "Pages + databases",
-    Icon: NotionLogo,
-    blurb: "Connect your own workspace. Searches the pages you share with Escort for scope notes.",
+    scope: "The pages you choose",
+    Mark: NotionMark,
+    blurb: "Connect your own workspace. Escort reads, and when you ask, updates only the pages you pick.",
     steps: [
-      "Open notion.so/profile/integrations and create an internal integration in your own workspace.",
-      "Copy its token, then share the pages you want with that integration.",
-      "To save or update notes too: under Capabilities tick Insert content and Update content, and share the pages notes should go to.",
-      "Paste the token below and press Connect Notion.",
+      "Press Connect Notion. Notion opens in your browser.",
+      "Choose the pages Escort can see, then allow access.",
+      "Come back here. Escort picks up the connection on its own.",
     ],
   },
 };
@@ -90,7 +87,7 @@ export default function ConnectAccounts({ onChange, compact = false }) {
 
 function ProviderCard({ provider, ctl }) {
   const meta = META[provider.id];
-  const { Icon } = meta;
+  const { Mark } = meta;
   const busy = ctl.busy[provider.id];
   const error = ctl.errors[provider.id];
   const authUrl = ctl.authUrls[provider.id];
@@ -98,6 +95,7 @@ function ProviderCard({ provider, ctl }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const demo = provider.mode === "mock";
   const isGoogle = provider.id === "google";
+  const reconnect = !isGoogle && !provider.connected && Boolean(provider.needs_reconnect);
   const needsCredentials = isGoogle && !provider.configured;
   const steps = needsCredentials ? meta.setupSteps : meta.steps;
 
@@ -112,15 +110,17 @@ function ProviderCard({ provider, ctl }) {
   return (
     <article className="flex h-full flex-col rounded-[22px] bg-white/[0.025] p-5 hairline">
       <header className="flex min-h-10 items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/[0.05] hairline">
-          <Icon size={20} aria-hidden />
-        </span>
+        <BrandTile>
+          <Mark size={22} />
+        </BrandTile>
         <div className="min-w-0 flex-1">
           <h4 className="text-[15px] font-medium">{meta.name}</h4>
           <p className="text-xs text-muted">{meta.scope}</p>
         </div>
         {provider.connected ? (
           <Pill tone={demo ? "warn" : "good"}>{demo ? "Demo data" : "Connected"}</Pill>
+        ) : reconnect ? (
+          <Pill tone="warn">Access ended</Pill>
         ) : (
           <Pill>Not connected</Pill>
         )}
@@ -131,8 +131,12 @@ function ProviderCard({ provider, ctl }) {
         {provider.connected ? (
           <>
             <CheckCircle size={18} weight="regular" className={demo ? "text-warn" : "text-commit"} aria-hidden />
-            <span className="min-w-0 truncate font-medium">{provider.account || "Account connected"}</span>
+            <span className="min-w-0 truncate font-medium">{provider.account || (isGoogle ? "Account connected" : "Notion workspace")}</span>
           </>
+        ) : reconnect ? (
+          <span className="text-warn">
+            Notion ended Escort's access to {provider.reconnect_account || "your workspace"}. Your page picks are kept.
+          </span>
         ) : (
           <span className="text-muted">{meta.blurb}</span>
         )}
@@ -147,6 +151,7 @@ function ProviderCard({ provider, ctl }) {
             </p>
           ) : null}
           {isGoogle && live && provider.needs_docs_consent ? <DocsConsent provider={provider} ctl={ctl} /> : null}
+          {!isGoogle && live ? <NotionAccess provider={provider} ctl={ctl} /> : null}
         </div>
       ) : (
         <div>
@@ -162,22 +167,6 @@ function ProviderCard({ provider, ctl }) {
           </ol>
 
           {needsCredentials ? <GoogleCredentials provider={provider} ctl={ctl} /> : null}
-
-          {provider.id === "notion" ? (
-            <form id="notion-token-form" onSubmit={submitToken} className="mt-4">
-              <label className="block">
-                <span className="text-xs font-medium">Integration token</span>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="ntn_… or secret_…"
-                  className="field mt-1.5 h-11 w-full px-4 text-sm"
-                />
-              </label>
-            </form>
-          ) : null}
         </div>
       )}
       </div>
@@ -196,7 +185,7 @@ function ProviderCard({ provider, ctl }) {
         ) : isGoogle ? (
           <>
             <Button variant="primary" disabled={Boolean(busy) || needsCredentials} onClick={ctl.connectGoogle}>
-              <Plugs size={16} aria-hidden />
+              <GoogleMark size={16} />
               {busy === "connecting" ? "Opening browser…" : busy === "waiting" ? "Waiting for Google…" : "Connect Google"}
             </Button>
             {busy === "waiting" ? (
@@ -213,12 +202,32 @@ function ProviderCard({ provider, ctl }) {
             ) : null}
           </>
         ) : (
-          <Button type="submit" form="notion-token-form" variant="primary" disabled={!token.trim() || busy === "connecting"}>
-            <Plugs size={16} aria-hidden />
-            {busy === "connecting" ? "Checking token…" : "Connect Notion"}
-          </Button>
+          <>
+            <Button variant="primary" disabled={Boolean(busy)} onClick={ctl.connectNotionOAuth}>
+              <NotionMark size={16} />
+              {busy === "connecting"
+                ? "Opening Notion…"
+                : busy === "waiting"
+                  ? "Waiting for Notion…"
+                  : reconnect
+                    ? "Reconnect Notion"
+                    : "Connect Notion"}
+            </Button>
+            {busy === "waiting" ? (
+              <div className="flex items-center gap-3 text-xs">
+                {authUrl ? (
+                  <a className={`inline-flex items-center gap-1 ${LINK}`} href={authUrl} target="_blank" rel="noreferrer">
+                    Open Notion again <ArrowSquareOut size={14} aria-hidden />
+                  </a>
+                ) : null}
+                <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
+                  Cancel
+                </button>
+              </div>
+            ) : null}
+          </>
         )}
-        {isGoogle && provider.configured ? (
+        {(isGoogle && provider.configured) || (!isGoogle && !provider.connected && busy !== "waiting") ? (
           <button
             type="button"
             aria-expanded={advancedOpen}
@@ -231,10 +240,38 @@ function ProviderCard({ provider, ctl }) {
         ) : null}
       </footer>
       {isGoogle && provider.configured && advancedOpen ? <GoogleCredentials provider={provider} ctl={ctl} advanced /> : null}
+      {!isGoogle && !provider.connected && advancedOpen ? (
+        <div className="mt-3 rounded-2xl bg-white/[0.03] p-4 hairline" aria-label="Advanced: Notion integration token">
+          <p className="text-xs font-medium">Use an integration token instead</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted text-pretty">
+            For workspaces that block app connections. Create an internal integration at{" "}
+            <a className={LINK} href={INTEGRATIONS_URL} target="_blank" rel="noreferrer">
+              notion.so/profile/integrations
+            </a>
+            , share your pages with it (page menu &gt; Connections), and tick Insert content and Update content to save notes.
+          </p>
+          <form onSubmit={submitToken} className="mt-3 flex gap-2">
+            <input
+              type="password"
+              autoComplete="off"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="ntn_… or secret_…"
+              aria-label="Notion integration token"
+              className="field h-9 min-w-0 flex-1 px-3.5 text-[13px]"
+            />
+            <Button type="submit" size="sm" disabled={!token.trim() || busy === "checking"}>
+              {busy === "checking" ? "Checking…" : "Connect with token"}
+            </Button>
+          </form>
+        </div>
+      ) : null}
 
       {busy === "waiting" && !provider.connected ? (
         <p className="mt-3 text-xs text-muted" role="status">
-          Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes.
+          {isGoogle
+            ? "Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes."
+            : "In Notion, choose the pages Escort can see and allow access. Escort notices on its own."}
         </p>
       ) : null}
       {error ? (
@@ -243,6 +280,22 @@ function ProviderCard({ provider, ctl }) {
         </p>
       ) : null}
     </article>
+  );
+}
+
+/** How Notion is connected, and (for the one-click connection) a way to change which pages Escort sees. */
+function NotionAccess({ provider, ctl }) {
+  const busy = ctl.busy.notion;
+  const oauth = provider.auth === "oauth";
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-muted">
+      <span>{oauth ? "Escort sees only the pages you chose in Notion." : "Connected with an integration token. Escort sees the pages shared with it."}</span>
+      {oauth ? (
+        <button type="button" className={`text-xs ${LINK}`} disabled={Boolean(busy)} onClick={ctl.connectNotionOAuth}>
+          {busy === "waiting" ? "Waiting for Notion…" : "Change pages"}
+        </button>
+      ) : null}
+    </p>
   );
 }
 
@@ -383,6 +436,7 @@ function NotionSaveNotes({ provider, ctl, live }) {
   const on = live && Boolean(provider.save_notes);
   const parent = provider.parent;
   const busy = ctl.busy.notion === "notes";
+  const oauth = provider.auth === "oauth";
   const [picking, setPicking] = useState(false);
   const showPicker = on && (!parent || picking);
 
@@ -410,16 +464,20 @@ function NotionSaveNotes({ provider, ctl, live }) {
           </button>
         </p>
       ) : null}
-      {showPicker ? <ParentPicker onPick={choose} onCancel={parent ? () => setPicking(false) : null} busy={busy} /> : null}
+      {showPicker ? <ParentPicker oauth={oauth} onPick={choose} onCancel={parent ? () => setPicking(false) : null} busy={busy} /> : null}
       {live ? <KeepUpdated provider={provider} ctl={ctl} /> : null}
       {on && provider.needs_capabilities ? (
         <div className="mt-3 rounded-xl bg-warn-soft px-3.5 py-3" role="status">
           <p className="text-xs leading-relaxed text-warn">
-            Notion blocked the last save. Give your integration the Insert content and Update content capabilities, then try again.
+            {oauth
+              ? "Notion blocked the last save. Click Change pages and include this page in what Escort can see, then try again."
+              : "Notion blocked the last save. Give your integration the Insert content and Update content capabilities, then try again."}
           </p>
-          <a className={`mt-2 inline-flex items-center gap-1 text-xs ${LINK}`} href={INTEGRATIONS_URL} target="_blank" rel="noreferrer">
-            Open Notion integrations <ArrowSquareOut size={13} aria-hidden />
-          </a>
+          {oauth ? null : (
+            <a className={`mt-2 inline-flex items-center gap-1 text-xs ${LINK}`} href={INTEGRATIONS_URL} target="_blank" rel="noreferrer">
+              Open Notion integrations <ArrowSquareOut size={13} aria-hidden />
+            </a>
+          )}
         </div>
       ) : null}
     </CapabilityRow>
@@ -454,7 +512,14 @@ function KeepUpdated({ provider, ctl }) {
         </ul>
       ) : null}
       {adding ? (
-        <ParentPicker title="Choose a page to keep updated" actionLabel="Keep this page updated" onPick={add} onCancel={() => setAdding(false)} busy={false} />
+        <ParentPicker
+          title="Choose a page to keep updated"
+          actionLabel="Keep this page updated"
+          oauth={provider.auth === "oauth"}
+          onPick={add}
+          onCancel={() => setAdding(false)}
+          busy={false}
+        />
       ) : (
         <button type="button" className={`mt-2 text-xs ${LINK}`} onClick={() => setAdding(true)}>
           Choose a page to keep updated
@@ -465,7 +530,7 @@ function KeepUpdated({ provider, ctl }) {
 }
 
 /** Pick a page from the same Notion search the Context screen uses. */
-function ParentPicker({ onPick, onCancel, busy, title = "Pick the page notes go under", actionLabel = "Use this page" }) {
+function ParentPicker({ onPick, onCancel, busy, oauth = false, title = "Pick the page notes go under", actionLabel = "Use this page" }) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState(null);
   const [error, setError] = useState("");
@@ -488,7 +553,7 @@ function ParentPicker({ onPick, onCancel, busy, title = "Pick the page notes go 
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search pages shared with Escort"
+          placeholder={oauth ? "Search the pages Escort can see" : "Search pages shared with Escort"}
           aria-label="Search Notion pages"
           className="field h-9 min-w-0 flex-1 px-3.5 text-[13px]"
         />
@@ -514,7 +579,11 @@ function ParentPicker({ onPick, onCancel, busy, title = "Pick the page notes go 
             ))}
           </ul>
         ) : (
-          <p className="mt-2 text-xs text-muted">No pages found. Share the page with your integration (page menu &gt; Connections), then search again.</p>
+          <p className="mt-2 text-xs text-muted">
+            {oauth
+              ? "No pages found. Click Change pages to let Escort see more of your workspace, then search again."
+              : "No pages found. Share the page with your integration (page menu > Connections), then search again."}
+          </p>
         )
       ) : null}
       {error ? <p className="mt-2 text-xs text-conflict">{error}</p> : null}

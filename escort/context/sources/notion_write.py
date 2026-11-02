@@ -1,6 +1,7 @@
 """Save meeting notes to Notion: pages Escort created, plus existing pages the user picked.
 
-Uses the same internal-integration token as reading. Writing needs the integration's
+Runs over Notion MCP when the user connected with Notion's one-click OAuth (McpPages), else over the
+REST API with the pasted internal-integration token (RestPages). With a token, writing needs the integration's
 'Insert content' and 'Update content' capabilities and the page shared with it; a
 403/restricted_resource surfaces as a clear ConnectorScopeError (code needs_capabilities).
 
@@ -22,6 +23,7 @@ from typing import Any
 
 from escort.context.sources.base import ConnectorAuthError, ConnectorError, ConnectorSetupError
 from escort.context.sources.google_docs import commitment_line, doc_title
+from escort.context.sources.notion_mcp import blocks_markdown, markdown_blocks, replace_prefix, unique_span
 from escort.context.sources.notion_source import PROVIDER, NotionClient, _plain, block_line
 from escort.store import utc_now
 
@@ -163,46 +165,21 @@ def summary_children(summary: dict[str, Any], stamp: str) -> list[dict[str, Any]
     return out
 
 
-class NotionNotes:
-    def __init__(self, client: NotionClient, state: NotionNotesState) -> None:
+class RestPages:
+    """Page operations over the REST API with the pasted integration token."""
+
+    def __init__(self, client: NotionClient) -> None:
         self.client = client
-        self.state = state
 
-    def require_write(self) -> dict[str, str]:
-        if not self.client.connected():
-            raise ConnectorAuthError(PROVIDER, "Connect Notion first, then turn on Save notes to Notion.", code="not_connected")
-        parent = self.state.parent()
-        if parent is None:
-            raise ConnectorSetupError(PROVIDER, "Pick the Notion page Escort should save meeting pages under.", code="no_parent")
-        return parent
-
-    def _allowed(self, page_id: str) -> None:
-        wanted = _norm_id(page_id)
-        parent = self.state.parent()
-        if parent and _norm_id(parent["id"]) == wanted:
-            return
-        if any(_norm_id(entry.get("page_id", "")) == wanted for entry in self.state.pages().values()):
-            return
-        if wanted in self.state.targets():
-            return
-        raise UnknownPageError(
-            PROVIDER,
-            "Escort only writes to Notion pages it created or that you picked under Choose a page to keep updated.",
-        )
-
-    def create_page(self, title: str) -> dict[str, Any]:
-        parent = self.require_write()
+    def create_page(self, parent_id: str, title: str) -> dict[str, Any]:
         page = self.client._call(
             "POST",
             "/pages",
-            json={"parent": {"page_id": parent["id"]}, "properties": {"title": {"title": _text(title)}}},
+            json={"parent": {"page_id": parent_id}, "properties": {"title": {"title": _text(title)}}},
         )
-        page_id = str(page["id"])
-        return {"page_id": page_id, "url": str(page.get("url") or ""), "title": title, "created_at": utc_now()}
+        return {"id": str(page["id"]), "url": str(page.get("url") or "")}
 
-    def append_blocks(self, page_id: str, children: list[dict[str, Any]], after: str | None = None) -> None:
-        self._allowed(page_id)
-        self.require_write()
+    def append(self, page_id: str, children: list[dict[str, Any]], after: str | None = None) -> None:
         for start in range(0, len(children), MAX_CHILDREN):
             body: dict[str, Any] = {"children": children[start : start + MAX_CHILDREN]}
             if after:
@@ -210,12 +187,7 @@ class NotionNotes:
             self.client._call("PATCH", f"/blocks/{page_id}/children", json=body)
             after = None
 
-    # ---- existing pages: read, then targeted edits -----------------------------------
-    def read_page(self, page_id: str) -> list[dict[str, Any]]:
-        """Top-level blocks of a page as [{id, type, text, line, level}], read with the same token."""
-        self._allowed(page_id)
-        if not self.client.connected():
-            raise ConnectorAuthError(PROVIDER, "Connect Notion first.", code="not_connected")
+    def read_blocks(self, page_id: str) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         cursor: str | None = None
         while len(blocks) < MAX_READ_BLOCKS:
@@ -239,6 +211,113 @@ class NotionNotes:
                 break
         return blocks[:MAX_READ_BLOCKS]
 
+    def edit(self, page_id: str, target: dict[str, Any], text: str) -> None:
+        kind = target["type"]
+        self.client._call("PATCH", f"/blocks/{target['id']}", json={kind: {"rich_text": _text(text)}})
+
+
+class McpPages:
+    """The same page operations through Notion MCP tools (OAuth connection).
+
+    Notion MCP edits markdown, not block ids, so a page is read as lines and each line gets a
+    content-hashed id; edits name the exact text that was on the page when it was read.
+    """
+
+    def __init__(self, mcp: Any) -> None:
+        self.mcp = mcp
+
+    def create_page(self, parent_id: str, title: str) -> dict[str, Any]:
+        return self.mcp.create_page(parent_id, title)
+
+    def _lines(self, page_id: str) -> tuple[list[str], list[dict[str, Any]]]:
+        _title, body = self.mcp.fetch_markdown(page_id)
+        return markdown_blocks(body)
+
+    def append(self, page_id: str, children: list[dict[str, Any]], after: str | None = None) -> None:
+        markdown = blocks_markdown(children)
+        lines, blocks = self._lines(page_id)
+        if after:
+            anchor = next((item for item in blocks if item["id"] == after), None)
+            if anchor is None:
+                raise BlockNotFoundError(PROVIDER, "That part of the page changed. Open the page and try again.")
+            index = anchor["index"]
+        else:
+            index = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip()), None)
+        if index is None:
+            self.mcp.write_empty(page_id, markdown)
+            return
+        _start, span = unique_span(lines, index)
+        self.mcp.insert_after(page_id, span, markdown)
+
+    def read_blocks(self, page_id: str) -> list[dict[str, Any]]:
+        return self._lines(page_id)[1][:MAX_READ_BLOCKS]
+
+    def edit(self, page_id: str, target: dict[str, Any], text: str) -> None:
+        lines, blocks = self._lines(page_id)
+        current = next((item for item in blocks if item["id"] == target["id"]), None)
+        if current is None:
+            raise BlockNotFoundError(PROVIDER, "That block is not on the page anymore. Open the page and try again.")
+        index = current["index"]
+        start, span = unique_span(lines, index)
+        new = "\n".join([*lines[start:index], replace_prefix(lines[index], text)])
+        self.mcp.replace_span(page_id, span, new)
+
+
+class NotionNotes:
+    def __init__(self, client: NotionClient, state: NotionNotesState, mcp: Any = None) -> None:
+        self.client = client
+        self.state = state
+        self.mcp = mcp
+
+    def backend(self) -> RestPages | McpPages:
+        """MCP when connected through Notion's OAuth; the pasted-token REST API otherwise."""
+        if self.mcp is not None and self.mcp.connected():
+            return McpPages(self.mcp)
+        return RestPages(self.client)
+
+    def connected(self) -> bool:
+        return self.client.connected() or (self.mcp is not None and self.mcp.connected())
+
+    def require_write(self) -> dict[str, str]:
+        if not self.connected():
+            raise ConnectorAuthError(PROVIDER, "Connect Notion first, then turn on Save notes to Notion.", code="not_connected")
+        parent = self.state.parent()
+        if parent is None:
+            raise ConnectorSetupError(PROVIDER, "Pick the Notion page Escort should save meeting pages under.", code="no_parent")
+        return parent
+
+    def _allowed(self, page_id: str) -> None:
+        wanted = _norm_id(page_id)
+        parent = self.state.parent()
+        if parent and _norm_id(parent["id"]) == wanted:
+            return
+        if any(_norm_id(entry.get("page_id", "")) == wanted for entry in self.state.pages().values()):
+            return
+        if wanted in self.state.targets():
+            return
+        raise UnknownPageError(
+            PROVIDER,
+            "Escort only writes to Notion pages it created or that you picked under Choose a page to keep updated.",
+        )
+
+    def create_page(self, title: str) -> dict[str, Any]:
+        parent = self.require_write()
+        page = self.backend().create_page(parent["id"], title)
+        return {"page_id": page["id"], "url": page["url"], "title": title, "created_at": utc_now()}
+
+    def append_blocks(self, page_id: str, children: list[dict[str, Any]], after: str | None = None) -> None:
+        self._allowed(page_id)
+        self.require_write()
+        self.backend().append(page_id, children, after=after)
+
+    # ---- existing pages: read, then targeted edits -----------------------------------
+    def read_page(self, page_id: str) -> list[dict[str, Any]]:
+        """Top-level blocks of a page as [{id, type, text, line, level}], read with the same connection."""
+        self._allowed(page_id)
+        if not self.connected():
+            raise ConnectorAuthError(PROVIDER, "Connect Notion first.", code="not_connected")
+        return self.backend().read_blocks(page_id)
+
     def edit_block_text(self, page_id: str, block_id: str, text: str, blocks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Replace one block's text (PATCH /v1/blocks/{id}); the block must be on the page, read just now."""
         self._allowed(page_id)
@@ -249,8 +328,7 @@ class NotionNotes:
             raise BlockNotFoundError(PROVIDER, "That block is not on the page anymore. Open the page and try again.")
         if target["type"] not in EDITABLE_KINDS:
             raise ConnectorSetupError(PROVIDER, "Escort can only edit the text of paragraphs, headings, list items and to-dos.", code="not_editable")
-        kind = target["type"]
-        self.client._call("PATCH", f"/blocks/{target['id']}", json={kind: {"rich_text": _text(text)}})
+        self.backend().edit(page_id, target, text)
         return {"block_id": target["id"], "before": target["text"], "after": text}
 
     @staticmethod

@@ -78,7 +78,8 @@ export function useConnectors({ onChange } = {}) {
         } else if (Date.now() - started > POLL_LIMIT_MS) {
           stopPolling(id);
           setFlag(setBusy, id);
-          setFlag(setErrors, id, "Still waiting on Google. Try Connect again when you are ready.");
+          const name = id === "notion" ? "Notion" : "Google";
+          setFlag(setErrors, id, `Still waiting on ${name}. Try Connect again when you are ready.`);
         }
       }, POLL_MS);
     },
@@ -208,10 +209,26 @@ export function useConnectors({ onChange } = {}) {
     [load],
   );
 
+  /** One-click Notion: the backend opens Notion's consent page; poll until the loopback finishes. */
+  const connectNotionOAuth = useCallback(async () => {
+    setFlag(setErrors, "notion");
+    setFlag(setBusy, "notion", "connecting");
+    try {
+      const data = await post("/api/connectors/notion/connect");
+      if (data?.auth_url) setFlag(setAuthUrls, "notion", data.auth_url);
+      setFlag(setBusy, "notion", "waiting");
+      poll("notion", (p) => p?.connected && p?.auth === "oauth");
+    } catch (err) {
+      setFlag(setBusy, "notion");
+      setFlag(setErrors, "notion", err.message || "Could not open Notion in your browser.");
+    }
+  }, [poll]);
+
+  /** Advanced: connect with a pasted internal-integration token instead. */
   const connectNotion = useCallback(
     async (token) => {
       setFlag(setErrors, "notion");
-      setFlag(setBusy, "notion", "connecting");
+      setFlag(setBusy, "notion", "checking");
       try {
         await post("/api/connectors/notion/connect", { token });
         await load();
@@ -269,6 +286,7 @@ export function useConnectors({ onChange } = {}) {
     setNotionNotes,
     saveGoogleCredentials,
     connectNotion,
+    connectNotionOAuth,
     disconnect,
     cancelWait,
     reload: load,

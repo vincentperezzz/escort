@@ -246,7 +246,7 @@ function Connections({ status, refresh, setup }) {
         <ConnectAccounts onChange={refresh} />
       </Bezel>
       <form onSubmit={setup.submit} className="space-y-5">
-        <Group title="Muse" hint="The model that writes your cards. Secrets go to the OS keychain, never to this repo.">
+        <Group title="Muse" hint="The model that writes your cards. Your key stays on this machine, stored securely in your OS keychain and never hardcoded.">
           <div className="px-5 pb-2 pt-3">
             <Field
               label="Meta API key"

@@ -62,6 +62,8 @@ KEY_NAMES = (
     "whatsapp_app_secret",
     "whatsapp_verify_token",
     "notion_oauth_token",
+    "notion_mcp_token",
+    "notion_mcp_client",
     "google_oauth_token",
     "google_client_secret",
     "google_api_key",
@@ -120,7 +122,7 @@ class DesktopRuntime:
         self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
         self.connectors.save_notes_getter = lambda: self.save_notes_enabled
         self.notes = GoogleNotes(self.connectors.google, DictNotesState(self.prefs, on_change=self._write_prefs))
-        self.notion_notes = NotionNotes(self.connectors.notion, NotionNotesState(self.prefs, on_change=self._write_prefs))
+        self.notion_notes = NotionNotes(self.connectors.notion, NotionNotesState(self.prefs, on_change=self._write_prefs), mcp=self.connectors.notion_mcp)
         self.connectors.notion_notes_getter = self._notion_notes_view
         self._notion_plans: dict[str, dict[str, Any]] = {}  # confirmation previews waiting for Confirm / Cancel
         # One Google Doc per meeting; a new id when a new listening session starts or the meeting is deleted.
@@ -361,8 +363,13 @@ class DesktopRuntime:
     def connect_google(self) -> dict[str, str]:
         return self.connectors.connect_google()
 
-    def connect_notion(self, token: str) -> dict[str, Any]:
-        return self.connectors.connect_notion(token)
+    def connect_notion(self, token: str = "") -> dict[str, Any]:
+        """No token: one-click OAuth (returns auth_url; the UI polls status). A token: the Advanced REST fallback."""
+        if token.strip():
+            return self.connectors.connect_notion(token)
+        out = self.connectors.connect_notion_oauth()
+        self._notify()
+        return out
 
     def disconnect_connector(self, provider: str) -> dict[str, Any]:
         return self.connectors.disconnect(provider)
@@ -551,14 +558,14 @@ class DesktopRuntime:
 
     def notes_notion_status(self) -> dict[str, Any]:
         """The current meeting's Notion page (if any) and whether saving is possible. No network."""
-        notion = self.connectors.notion
+        connected = self.notion_notes.connected()
         view = self._notion_notes_view()
         entry = self.notion_notes.page_for(self.meeting_id)
         return {
             "enabled": view["save_notes"],
-            "connected": notion.connected(),
-            "write_notes": notion.connected() and bool(view["parent"]) and not view["needs_capabilities"],
-            "needs_parent": view["save_notes"] and notion.connected() and not view["parent"],
+            "connected": connected,
+            "write_notes": connected and bool(view["parent"]) and not view["needs_capabilities"],
+            "needs_parent": view["save_notes"] and connected and not view["parent"],
             "needs_capabilities": view["needs_capabilities"],
             "parent": view["parent"],
             "targets": view["targets"],

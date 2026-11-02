@@ -46,8 +46,10 @@ from escort.context.sources.google_source import (
     parse_google_link,
 )
 
-CONSENT_CAPABILITIES = ("docs", "sheets", "slides", "drive_files", "notes")
+from escort.context.sources.notion_mcp import NotionMcp
 from escort.context.sources.notion_source import NotionClient
+
+CONSENT_CAPABILITIES = ("docs", "sheets", "slides", "drive_files", "notes")
 
 MODES = ("auto", "live", "mock")
 CALENDAR_TTL_S = 60.0
@@ -96,10 +98,12 @@ class Connectors:
         self.secrets = secrets
         self.http = http or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True)
         self.google = GoogleAuth(secrets, self.http, client_id_getter=client_id_getter, open_browser=open_browser, bundled_path=bundled_path, user_path=user_path)
-        self.notion = NotionClient(secrets, self.http)
+        self.notion = NotionClient(secrets, self.http)  # pasted integration token (REST), the fallback
+        self.notion_mcp = NotionMcp(secrets, self.http, open_browser=open_browser)  # one-click OAuth (MCP)
         self.generation = 0
         self.google.on_change = self._bump
         self.notion.on_change = self._bump
+        self.notion_mcp.on_change = self._bump
         # Set by the runtime: whether the user turned on "Save notes to Drive".
         self.save_notes_getter: Callable[[], bool] = lambda: False
         # Set by the runtime: {"save_notes": bool, "parent": {...} | None, "needs_capabilities": bool}.
@@ -119,8 +123,16 @@ class Connectors:
         if provider == "google":
             return self.google.connected()
         if provider == "notion":
-            return self.notion.connected()
+            return self.notion_mcp.connected() or self.notion.connected()
         raise KeyError(provider)
+
+    def notion_auth(self) -> str | None:
+        """'oauth' (Notion MCP, preferred), 'token' (pasted integration token, REST) or None."""
+        if self.notion_mcp.connected():
+            return "oauth"
+        if self.notion.connected():
+            return "token"
+        return None
 
     def status(self) -> dict[str, Any]:
         return {"providers": [self._google_row(), self._notion_row()]}
@@ -194,25 +206,40 @@ class Connectors:
         }
 
     def _notion_row(self) -> dict[str, Any]:
-        connected = self.notion.connected()
-        if connected:
-            hint = "Connected. Only pages shared with your integration are visible."
+        auth = self.notion_auth()
+        connected = auth is not None
+        mcp = self.notion_mcp
+        needs_reconnect = auth != "oauth" and mcp.needs_reconnect()
+        pending = mcp.pending()
+        if auth == "oauth":
+            hint = "Connected through Notion. Escort sees only the pages you chose on Notion's consent screen."
+        elif auth == "token":
+            hint = "Connected with an integration token. Only pages shared with your integration are visible."
+        elif pending:
+            hint = "Finish connecting in your browser: choose the pages Escort can see, then allow access."
+        elif needs_reconnect:
+            hint = "Notion ended Escort's access. Reconnect Notion to keep using it."
         else:
-            hint = (
-                "Create an internal integration at notion.so/my-integrations, share the pages you want "
-                "with it (page menu > Connections), then paste its secret here."
-            )
-            if self.notion.last_error:
-                hint = f"{self.notion.last_error}. {hint}"
+            hint = "Click Connect Notion. Notion opens in your browser, where you choose the pages Escort can see."
+        error = mcp.last_error or self.notion.last_error
+        if error and not connected and not pending:
+            hint = f"{error}. {hint}"
         notes = self.notion_notes_getter() or {}
         save_notes = bool(notes.get("save_notes"))
         parent = notes.get("parent") if connected else None
         needs_capabilities = bool(notes.get("needs_capabilities")) and connected
+        account = (mcp.account() if auth == "oauth" else self.notion.account() if auth == "token" else None)
         return {
             "id": "notion",
             "label": "Notion",
             "connected": connected,
-            "account": self.notion.account() if connected else None,
+            # oauth: one-click Notion MCP connection; token: pasted integration token; None: not connected.
+            "auth": auth,
+            "account": account,
+            # Workspace of the ended OAuth connection, so the Reconnect prompt can name it.
+            "reconnect_account": mcp.account() if needs_reconnect else None,
+            "needs_reconnect": needs_reconnect,
+            "pending": pending,
             "mode": self.provider_mode("notion"),
             "configured": True,
             "setup_hint": hint,
@@ -285,13 +312,19 @@ class Connectors:
         return fetch_drive_file(self.google, file_id, mime_type, name)
 
     def connect_notion(self, token: str) -> dict[str, Any]:
+        """Advanced fallback: connect with a pasted internal-integration token (REST API)."""
         self.notion.connect(token)
         return self.status()
+
+    def connect_notion_oauth(self, open_browser: bool = True) -> dict[str, str]:
+        """One-click: open Notion's consent page in the browser; the loopback listener finishes it."""
+        return {"auth_url": self.notion_mcp.begin(open_browser=open_browser)}
 
     def disconnect(self, provider: str) -> dict[str, Any]:
         if provider == "google":
             self.google.disconnect()
         elif provider == "notion":
+            self.notion_mcp.disconnect()
             self.notion.disconnect()
         else:
             raise KeyError(provider)
@@ -317,24 +350,28 @@ class NotionSource:
         self.connectors = connectors
 
     def connected(self) -> bool:
-        return self.connectors.notion.connected()
+        return self.connectors.connected("notion")
 
     def mode(self) -> str:
         return self.connectors.provider_mode("notion")
+
+    def _client(self) -> Any:
+        """Notion MCP when connected through OAuth, else the pasted-token REST client."""
+        return self.connectors.notion_mcp if self.connectors.notion_auth() == "oauth" else self.connectors.notion
 
     def search(self, query: str, limit: int = 8) -> list[dict]:
         if self.mode() == "mock":
             return _label_mock(_filter_hits(mock_notion_hits(), query, limit))
         if not self.connected():
             return []
-        return self.connectors.notion.search(query, limit)
+        return self._client().search(query, limit)
 
     def fetch(self, external_id: str) -> ContextItem:
         if self.mode() == "mock":
             return mock_import_item("notion", external_id)
         if not self.connected():
             raise ConnectorAuthError("notion", "Notion is not connected")
-        return self.connectors.notion.fetch(external_id)
+        return self._client().fetch(external_id)
 
     def list_upcoming_events(self, limit: int = 5) -> list[CalendarEvent]:
         return []

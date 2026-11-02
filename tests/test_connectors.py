@@ -456,6 +456,11 @@ def test_status_contract_and_no_token_leak(tmp_path: Path):
             "needs_capabilities",
             "has_api_key",
             "consent",
+            # Notion: one-click OAuth (MCP) vs pasted token, and the Reconnect prompt.
+            "auth",
+            "needs_reconnect",
+            "reconnect_account",
+            "pending",
         }
     google = status["providers"][0]
     assert google["capabilities"] == {

@@ -169,17 +169,23 @@ const providers = [
   notionRow(),
 ];
 
-// ?notion=off (not connected) | live (connected, notes off) | pick (on, no parent) | notes (on, parent set) | caps (blocked)
+// ?notion=off (not connected) | live (one-click OAuth, notes off) | token (pasted integration token) | pick (on, no parent)
+// | notes (on, parent set) | caps (blocked) | reconnect (Notion ended the OAuth grant)
 function notionRow() {
   const n = params.get("notion");
-  const live = ["live", "pick", "notes", "caps"].includes(n);
+  const live = ["live", "token", "pick", "notes", "caps"].includes(n);
   const on = ["pick", "notes", "caps"].includes(n);
   const parent = ["notes", "caps"].includes(n) ? { id: "p-meetings", title: "Client meetings" } : null;
+  const connected = !["off", "reconnect"].includes(n);
   return {
     id: "notion",
     label: "Notion",
-    connected: n !== "off",
-    account: "BayaniPay workspace",
+    connected,
+    auth: connected ? (n === "token" ? "token" : "oauth") : null,
+    needs_reconnect: n === "reconnect",
+    reconnect_account: n === "reconnect" ? "BayaniPay workspace" : null,
+    pending: false,
+    account: connected ? "BayaniPay workspace" : null,
     mode: live ? "live" : "mock",
     configured: true,
     setup_hint: "",
@@ -453,6 +459,22 @@ export async function handle(path, options = {}) {
     const google = providers[0];
     setTimeout(() => Object.assign(google, { needs_docs_consent: false, capabilities: { ...google.capabilities, read_docs: true } }), 4000);
     return { auth_url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" };
+  }
+  if (path === "/api/connectors/notion/connect") {
+    const n = providers[1];
+    if (body.token) {
+      if (!/^(ntn_|secret_)/.test(body.token)) throw mockError("Notion rejected this token; copy the integration secret again", 400);
+      Object.assign(n, { connected: true, auth: "token", mode: "live", needs_reconnect: false, account: "BayaniPay workspace" });
+      return { providers };
+    }
+    // Pretend the user picks pages and allows access in the browser a few seconds later.
+    n.pending = true;
+    setTimeout(() => Object.assign(n, { pending: false, connected: true, auth: "oauth", mode: "live", needs_reconnect: false, account: "BayaniPay workspace" }), 4000);
+    return { auth_url: "https://mcp.notion.com/authorize?mock=1" };
+  }
+  if (path === "/api/connectors/notion/disconnect") {
+    Object.assign(providers[1], { connected: false, auth: null, mode: "mock", account: null, save_notes: false });
+    return { providers };
   }
   if (path === "/api/connectors/notion/targets") {
     const n = providers[1];

@@ -179,7 +179,7 @@ class GoogleAuth:
     def _read_client_file(path: Path) -> tuple[str, str, str]:
         """(client_id, client_secret, api_key) from a google_client.json file; never logged."""
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             return "", "", ""
         if not isinstance(data, dict):

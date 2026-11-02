@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight, ArrowRight, CalendarBlank, EyeSlash, Eye, Stop, ArrowUp, Plugs, PhoneDisconnect } from "@phosphor-icons/react";
+import { BrandTile, GoogleMark, NotionMark } from "../components/BrandMark.jsx";
 import { Bezel, Button, Dot, Kbd, Pill } from "../components/ui.jsx";
 import { api, post, formatEventWhen, formatTime, relativeStart, mmss } from "../lib/api.js";
 import { kindOf } from "../lib/cards.js";
@@ -239,12 +240,13 @@ function Connections({ className, go }) {
           <li className="text-[13px] text-muted">Connect Google and Notion to pull in your calendar and notes.</li>
         ) : (
           list.map((p) => (
-            <li key={p.id} className="flex items-center gap-3 rounded-2xl bg-white/[0.025] px-3.5 py-2.5 hairline">
-              <Dot tone={p.connected ? "mint" : "faint"} />
+            <li key={p.id} className="flex items-center gap-3 rounded-2xl bg-white/[0.025] px-3 py-2.5 hairline">
+              <BrandTile size={30}>{p.id === "google" ? <GoogleMark size={17} /> : <NotionMark size={18} />}</BrandTile>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] font-medium">{(p.label || p.id).replace(/ \(.*\)$/, "")}</p>
                 <p className="truncate text-[12px] text-muted">{p.connected ? p.account || "Connected" : "Not connected"}</p>
               </div>
+              <Dot tone={p.connected ? "mint" : "faint"} />
             </li>
           ))
         )}
