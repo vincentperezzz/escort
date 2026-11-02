@@ -229,7 +229,7 @@ export default function ContextScreen({ status, refresh, go }) {
               <span className="min-w-0 flex-1">
                 <span className="block text-[15px] font-medium">Prep chat</span>
                 <span className="block text-[13px] text-muted">
-                  {chatCount ? `${chatCount} message${chatCount === 1 ? "" : "s"} so far` : "Ask Muse what to watch for"}
+                  {chatCount ? `${chatCount} message${chatCount === 1 ? "" : "s"} so far` : "Ask Escort AI what to watch for"}
                 </span>
               </span>
               <ArrowUpRight size={17} className="btn-icon text-faint group-hover:text-ink" aria-hidden />

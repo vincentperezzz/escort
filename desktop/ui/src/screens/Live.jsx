@@ -115,7 +115,7 @@ export default function Live({ status, refresh, setListening, go, transcriptOpen
           {listening ? (
             <div className="flex items-center gap-2">
               <Button variant="ghost" onClick={() => post("/api/overlay", { visible: true }).catch(() => {})}>
-                Back to overlay
+                <ArrowSquareOut size={14} className="text-[#c6bfff]" aria-hidden /> Back to overlay
               </Button>
               <Button variant="dangerGhost" onClick={toggleListen} disabled={busy}>
                 <Stop size={14} weight="fill" aria-hidden /> Stop listening

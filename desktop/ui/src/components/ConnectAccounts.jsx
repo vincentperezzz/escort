@@ -264,11 +264,29 @@ function ProviderCard({ provider, ctl }) {
       ) : null}
 
       {busy === "waiting" && !provider.connected ? (
-        <p className="mt-3 text-xs leading-relaxed text-muted" role="status">
-          {isGoogle
-            ? "Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes."
-            : "In Notion, choose the pages Escort can see and allow access. If signing in took you to your Notion workspace homepage first, click Open Notion again above now that you're signed in—it will go straight to the Allow access screen and return to Escort."}
-        </p>
+        <div className="mt-3 space-y-2 rounded-2xl bg-white/[0.03] p-3.5 hairline" role="status">
+          <p className="text-xs leading-relaxed text-muted">
+            {isGoogle
+              ? "Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes."
+              : "In Notion, choose the pages Escort can see and click Allow access. If Notion redirected back to your homepage or didn't auto-return to Escort, paste your Notion token (ntn_… or secret_…) or the browser address bar URL below to finish connecting immediately:"}
+          </p>
+          {!isGoogle ? (
+            <form onSubmit={submitToken} className="flex gap-2 pt-1">
+              <input
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="ntn_…, secret_…, or paste address bar URL"
+                aria-label="Notion integration token or address bar URL"
+                className="field h-8 min-w-0 flex-1 px-3 text-[12.5px]"
+              />
+              <Button type="submit" size="sm" disabled={!token.trim() || busy === "checking"}>
+                {busy === "checking" ? "Connecting…" : "Connect"}
+              </Button>
+            </form>
+          ) : null}
+        </div>
       ) : null}
       {error ? (
         <p className="mt-3 text-xs font-medium text-conflict" role="alert">

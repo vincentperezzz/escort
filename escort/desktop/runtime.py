@@ -447,9 +447,25 @@ class DesktopRuntime:
         return self.connectors.connect_google()
 
     def connect_notion(self, token: str = "") -> dict[str, Any]:
-        """No token: one-click OAuth (returns auth_url; the UI polls status). A token: the Advanced REST fallback."""
-        if token.strip():
-            return self.connectors.connect_notion(token)
+        """No token: one-click OAuth (returns auth_url; the UI polls status). A token or callback URL: REST fallback or exchange."""
+        raw = token.strip()
+        if raw:
+            if "code=" in raw or raw.startswith("http://") or raw.startswith("https://"):
+                try:
+                    import urllib.parse
+
+                    parsed = urllib.parse.urlsplit(raw)
+                    params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items() if v}
+                    code = params.get("code") or (raw.split("code=")[1].split("&")[0] if "code=" in raw else "")
+                    if code:
+                        flow = self.connectors.notion_mcp._flow
+                        if flow is not None:
+                            self.connectors.notion_mcp.exchange_code(code, flow)
+                            self._notify()
+                            return self.connectors_status()
+                except Exception as exc:
+                    log.warning("Manual code exchange failed: %s", exc)
+            return self.connectors.connect_notion(raw)
         out = self.connectors.connect_notion_oauth()
         self._notify()
         return out

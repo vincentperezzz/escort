@@ -1,6 +1,6 @@
 /**
  * Safe, lightweight Markdown renderer for Escort AI chat replies.
- * Renders paragraphs, bullet/numbered lists, headings, **bold**, *italic*, and `inline code`.
+ * Renders paragraphs, bullet/numbered lists, headings, fenced code blocks, **bold**, *italic*, and `inline code`.
  */
 export default function FormattedText({ text, cursor = null, className = "" }) {
   const blocks = parseBlocks(String(text || ""));
@@ -11,9 +11,9 @@ export default function FormattedText({ text, cursor = null, className = "" }) {
         const tail = isLast ? cursor : null;
         if (block.type === "ul") {
           return (
-            <ul key={idx} className="my-1.5 space-y-1.5 pl-4">
+            <ul key={idx} className="my-2 space-y-1.5 pl-5 list-disc marker:text-accent">
               {block.items.map((item, j) => (
-                <li key={j} className="relative pl-1.5 marker:text-muted list-disc">
+                <li key={j} className="pl-1 text-ink/90">
                   <Inline text={item} />
                   {isLast && j === block.items.length - 1 ? tail : null}
                 </li>
@@ -23,9 +23,9 @@ export default function FormattedText({ text, cursor = null, className = "" }) {
         }
         if (block.type === "ol") {
           return (
-            <ol key={idx} className="my-1.5 space-y-1.5 pl-5 list-decimal">
+            <ol key={idx} className="my-2 space-y-1.5 pl-5 list-decimal marker:text-muted">
               {block.items.map((item, j) => (
-                <li key={j} className="pl-1 marker:text-muted">
+                <li key={j} className="pl-1 text-ink/90">
                   <Inline text={item} />
                   {isLast && j === block.items.length - 1 ? tail : null}
                 </li>
@@ -33,16 +33,24 @@ export default function FormattedText({ text, cursor = null, className = "" }) {
             </ol>
           );
         }
+        if (block.type === "code") {
+          return (
+            <div key={idx} className="my-2 overflow-x-auto rounded-xl bg-white/[0.04] p-3 text-xs font-mono text-ink/90 hairline">
+              <pre className="whitespace-pre">{block.lines.join("\n")}</pre>
+              {tail}
+            </div>
+          );
+        }
         if (block.type === "heading") {
           return (
-            <p key={idx} className="font-semibold text-ink">
+            <p key={idx} className="mt-2 font-semibold text-ink">
               <Inline text={block.text} />
               {tail}
             </p>
           );
         }
         return (
-          <p key={idx} className="whitespace-pre-wrap">
+          <p key={idx} className="whitespace-pre-wrap leading-relaxed text-ink/90">
             <Inline text={block.text} />
             {tail}
           </p>
@@ -57,6 +65,7 @@ function parseBlocks(raw) {
   const blocks = [];
   let para = [];
   let list = null;
+  let codeBlock = null;
 
   const flushPara = () => {
     if (para.length) {
@@ -73,6 +82,22 @@ function parseBlocks(raw) {
 
   for (const line of lines) {
     const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      flushPara();
+      flushList();
+      if (codeBlock) {
+        blocks.push(codeBlock);
+        codeBlock = null;
+      } else {
+        const lang = trimmed.slice(3).trim();
+        codeBlock = { type: "code", lang, lines: [] };
+      }
+      continue;
+    }
+    if (codeBlock) {
+      codeBlock.lines.push(line);
+      continue;
+    }
     if (!trimmed) {
       flushPara();
       flushList();
@@ -112,10 +137,13 @@ function parseBlocks(raw) {
   }
   flushPara();
   flushList();
+  if (codeBlock) {
+    blocks.push(codeBlock);
+  }
   return blocks.length ? blocks : [{ type: "p", text: raw }];
 }
 
-const INLINE_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\s][^*\n]*?\*)/g;
+const INLINE_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\s\n][^*\n]*?\*)/g;
 
 function Inline({ text }) {
   if (!text) return null;
@@ -138,7 +166,7 @@ function Inline({ text }) {
     }
     if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
       return (
-        <em key={i} className="italic">
+        <em key={i} className="italic text-ink/80">
           {part.slice(1, -1)}
         </em>
       );
@@ -146,4 +174,3 @@ function Inline({ text }) {
     return part;
   });
 }
-
