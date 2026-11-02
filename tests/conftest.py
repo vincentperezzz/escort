@@ -54,3 +54,14 @@ def no_real_capture_or_keys(monkeypatch):
 
 
 ONE_DISPLAY = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+
+
+@pytest.fixture(autouse=True)
+def _no_user_google_client(monkeypatch, tmp_path_factory):
+    """Never read a developer's real google_client.json (per-user or in the repo root) during tests."""
+    from escort.context.sources import google_auth
+
+    monkeypatch.delenv("ESCORT_GOOGLE_API_KEY", raising=False)
+    missing = tmp_path_factory.mktemp("no-user-client") / "google_client.json"
+    monkeypatch.setattr(google_auth, "user_client_path", lambda: missing)
+    monkeypatch.setattr(google_auth, "bundled_client_path", lambda: missing)

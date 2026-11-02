@@ -15,15 +15,17 @@ export async function api(path, options = {}) {
   }
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    let detail = "";
+    let data = null;
     try {
-      const data = await response.json();
-      detail = data?.detail || data?.error || "";
+      data = await response.json();
     } catch {
       /* body was not JSON */
     }
-    const err = new Error(detail || `${response.status}`);
+    const err = new Error(data?.detail || data?.error || `${response.status}`);
     err.status = response.status;
+    err.code = data?.code || null; // e.g. needs_consent, api_disabled, notes_off
+    err.helpUrl = data?.help_url || null;
+    err.capability = data?.capability || null; // which "Allow … access" a needs_*_consent error asks for
     throw err;
   }
   return response.json();

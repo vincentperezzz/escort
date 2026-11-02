@@ -177,6 +177,7 @@ function Shell({ route }) {
             status={status}
             refresh={refresh}
             setListening={setListening}
+            go={go}
             transcriptOpen={transcriptOpen}
             onToggleTranscript={() => setTranscriptOpen((v) => !v)}
           />

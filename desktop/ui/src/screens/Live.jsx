@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, EyeSlash, Play, Stop } from "@phosphor-icons/react";
+import { ArrowSquareOut, Check, Eye, EyeSlash, NotePencil, Play, Stop } from "@phosphor-icons/react";
 import { Bezel, Button, Chip, Dot, Empty, WaveBars } from "../components/ui.jsx";
 import { post, mmss } from "../lib/api.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
 import ScreenLine from "../components/ScreenLine.jsx";
+import NoteDestination, { UpdatePreview } from "../components/NoteDestination.jsx";
+import { DEST_LABEL, cancelNotePage, confirmNotePage, isPageDest, noteHint, previewNotePage, saveNote, useNoteDestination } from "../lib/notes.js";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
 
-export default function Live({ status, refresh, setListening, transcriptOpen, onToggleTranscript }) {
+export default function Live({ status, refresh, setListening, go, transcriptOpen, onToggleTranscript }) {
   const meeting = status?.meeting || {};
   const cards = meeting.cards || [];
   const turns = meeting.utterances || [];
@@ -15,10 +17,64 @@ export default function Live({ status, refresh, setListening, transcriptOpen, on
   const sorted = useMemo(() => cards.slice().reverse(), [cards]);
   const elapsed = useListenClock(listening, listeningSince(status));
   const [busy, setBusy] = useState(false);
+  const destination = useNoteDestination(status);
+  const [notes, setNotes] = useState({}); // card id -> { state: "saving" | "doc" | "local" | "error", hint?, url?, label? }
 
   async function act(id, action) {
     await post(`/api/cards/${id}/action`, { action });
     refresh();
+  }
+
+  // User-clicked only: appends "who: what (due)" to this meeting's doc or page in the chosen destination.
+  async function noteIt(card) {
+    const { dest, label } = destination;
+    setNotes((cur) => ({ ...cur, [card.id]: { state: "saving" } }));
+    try {
+      if (isPageDest(dest)) {
+        // Existing page: read it, show what would be added, and write only after Confirm.
+        const preview = await previewNotePage(dest, { kind: "commitment", card_id: card.id });
+        setNotes((cur) => ({ ...cur, [card.id]: { state: "preview", preview, label: preview.page?.title } }));
+        return;
+      }
+      const data = await saveNote(dest, { kind: "commitment", card_id: card.id });
+      setNotes((cur) => ({ ...cur, [card.id]: { state: "doc", url: data?.doc?.url, label } }));
+      refresh();
+    } catch (err) {
+      const hint = noteHint(err, dest);
+      setNotes((cur) => ({ ...cur, [card.id]: { state: hint.quiet ? "local" : "error", hint } }));
+    }
+  }
+
+  async function confirmUpdate(card) {
+    const held = notes[card.id];
+    setNotes((cur) => ({ ...cur, [card.id]: { ...held, state: "saving" } }));
+    try {
+      await confirmNotePage(held.preview.plan_id);
+      setNotes((cur) => ({ ...cur, [card.id]: { state: "doc", label: held.preview.page?.title } }));
+      refresh();
+    } catch (err) {
+      setNotes((cur) => ({ ...cur, [card.id]: { state: "error", hint: noteHint(err, "notion") } }));
+    }
+  }
+
+  async function cancelUpdate(card) {
+    const held = notes[card.id];
+    if (held?.preview) cancelNotePage(held.preview.plan_id).catch(() => {});
+    setNotes((cur) => {
+      const next = { ...cur };
+      delete next[card.id];
+      return next;
+    });
+  }
+
+  function noteFor(card) {
+    const local = notes[card.id];
+    if (local) return local;
+    for (const dest of ["drive", "notion"]) {
+      const saved = dest === "drive" ? status?.notes?.drive || status?.notes_drive : status?.notes?.notion;
+      if ((saved?.noted_cards || []).includes(card.id)) return { state: "doc", url: saved.doc?.url, label: DEST_LABEL[dest] };
+    }
+    return null;
   }
   async function toggleListen() {
     setBusy(true);
@@ -90,7 +146,16 @@ export default function Live({ status, refresh, setListening, transcriptOpen, on
               <ol className="flex flex-col gap-4" aria-live="polite">
                 {sorted.map((card) => (
                   <li key={card.id} className="rise">
-                    <InsightCard card={card} onAct={act} />
+                    <InsightCard
+                      card={card}
+                      onAct={act}
+                      note={noteFor(card)}
+                      onNote={noteIt}
+                      onConfirmUpdate={confirmUpdate}
+                      onCancelUpdate={cancelUpdate}
+                      destination={destination}
+                      onFix={() => go?.("settings", "connections")}
+                    />
                   </li>
                 ))}
               </ol>
@@ -108,11 +173,13 @@ export default function Live({ status, refresh, setListening, transcriptOpen, on
   );
 }
 
-export function InsightCard({ card, onAct }) {
+export function InsightCard({ card, onAct, note = null, onNote, onFix, destination = null, onConfirmUpdate, onCancelUpdate }) {
   const kind = kindOf(card.type);
   const k = KIND[kind];
   const { Icon } = k;
   const isConflict = kind === "conflict";
+  const isCommit = kind === "commit" && Boolean(onNote);
+  const noted = note?.state === "doc" || note?.state === "local";
   return (
     <Bezel as="article" size="sm" coreClassName="relative overflow-hidden px-6 py-5">
       {isConflict ? (
@@ -146,6 +213,42 @@ export function InsightCard({ card, onAct }) {
               {a.label}
             </Chip>
           ))}
+        </div>
+      ) : null}
+      {isCommit ? (
+        <div className="relative mt-5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Chip tone="commit" onClick={() => onNote(card)} disabled={note?.state === "saving" || note?.state === "preview" || noted} aria-live="polite">
+              {noted ? <Check size={14} aria-hidden /> : <NotePencil size={14} aria-hidden />}
+              {note?.state === "saving" ? "Saving…" : note?.state === "doc" ? `Noted in ${note.label || "Docs"}` : noted ? "Noted" : "Note it"}
+            </Chip>
+            {note?.state === "doc" && note.url ? (
+              <a className="inline-flex items-center gap-1 text-[12.5px] font-medium text-commit underline-offset-4 hover:underline" href={note.url} target="_blank" rel="noreferrer">
+                Open in {note.label === "Notion" ? "Notion" : "Docs"} <ArrowSquareOut size={13} aria-hidden />
+              </a>
+            ) : null}
+            {!noted && destination ? (
+              <NoteDestination enabled={destination.enabled} labels={destination.labels} dest={destination.dest} onChange={destination.setDest} />
+            ) : null}
+          </div>
+          {note?.state === "preview" ? (
+            <UpdatePreview className="mt-3 max-w-[60ch]" preview={note.preview} onConfirm={() => onConfirmUpdate?.(card)} onCancel={() => onCancelUpdate?.(card)} />
+          ) : null}
+          {note?.hint ? (
+            <p className={`mt-2.5 max-w-[60ch] text-[12.5px] leading-relaxed ${note.state === "error" ? "text-warn" : "text-muted"}`} role="status">
+              {note.hint.text}{" "}
+              {note.hint.fix && onFix ? (
+                <button type="button" className="font-medium text-[#c6bfff] underline-offset-4 hover:underline" onClick={onFix}>
+                  Open Connections
+                </button>
+              ) : null}
+              {note.hint.href ? (
+                <a className="font-medium text-[#c6bfff] underline-offset-4 hover:underline" href={note.hint.href} target="_blank" rel="noreferrer">
+                  {note.hint.hrefLabel}
+                </a>
+              ) : null}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </Bezel>

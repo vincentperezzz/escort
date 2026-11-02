@@ -34,6 +34,19 @@ CALENDAR_ITEMS = {
 }
 
 
+KICKOFF_DOC = {
+    "documentId": "doc1abcdefgh",
+    "title": "Kickoff SOW",
+    "body": {
+        "content": [
+            {"paragraph": {"elements": [{"textRun": {"content": "Intro line.\n"}}]}},
+            {"paragraph": {"paragraphStyle": {"namedStyleType": "HEADING_2"}, "elements": [{"textRun": {"content": "2.1 Payments\n"}}]}},
+            {"paragraph": {"elements": [{"textRun": {"content": "Payments are Phase 2.\n"}}]}},
+        ]
+    },
+}
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in ("ESCORT_CONNECTORS", "ESCORT_GOOGLE_CLIENT_ID", "ESCORT_GOOGLE_CLIENT_SECRET"):
@@ -68,25 +81,12 @@ class FakeGoogle:
         bearer = request.headers.get("Authorization", "").removeprefix("Bearer ")
         if bearer not in self.valid_access:
             return httpx.Response(401, json={"error": {"message": "invalid credentials"}})
-        if request.url.path == "/drive/v3/about":
-            return httpx.Response(200, json={"user": {"emailAddress": "me@example.com"}})
+        if request.url.path == "/calendar/v3/calendars/primary":
+            return httpx.Response(200, json={"id": "me@example.com"})
         if request.url.path == "/calendar/v3/calendars/primary/events":
             return httpx.Response(200, json=CALENDAR_ITEMS)
-        if request.url.path == "/drive/v3/files":
-            return httpx.Response(
-                200,
-                json={
-                    "files": [
-                        {"id": "doc1", "name": "Kickoff SOW", "mimeType": "application/vnd.google-apps.document", "modifiedTime": "2026-10-30T01:00:00Z"},
-                        {"id": "dir1", "name": "Folder", "mimeType": "application/vnd.google-apps.folder"},
-                    ]
-                },
-            )
-        if request.url.path == "/drive/v3/files/doc1":
-            return httpx.Response(200, json={"id": "doc1", "name": "Kickoff SOW", "mimeType": "application/vnd.google-apps.document"})
-        if request.url.path == "/drive/v3/files/doc1/export":
-            assert request.url.params["mimeType"] == "text/markdown"
-            return httpx.Response(200, text="Intro line.\n\n## 2.1 Payments\nPayments are Phase 2.\n")
+        if request.url.path == "/v1/documents/doc1abcdefgh":
+            return httpx.Response(200, json=KICKOFF_DOC)
         return httpx.Response(404, json={"error": {"message": "not found"}})
 
 
@@ -129,14 +129,15 @@ def test_auto_mode_mock_until_connected_then_never_mock():
     sources = build_sources(connectors)
     events = sources["google_calendar"].list_upcoming_events(5)
     assert events and all(event.mock for event in events)
-    hits = sources["drive"].search("")
-    assert hits and all(hit["mock"] for hit in hits)
+    assert sources["google_docs"].search("") == []
+    demo = sources["google_docs"].fetch("https://docs.google.com/document/d/doc1abcdefgh/edit")
+    assert demo.mock is True and demo.source_label == "Google Docs"
 
     _store_tokens(secrets)
     events = sources["google_calendar"].list_upcoming_events(5)
     assert [event.id for event in events] == ["evt_real"]
     assert not any(event.mock for event in events)
-    assert all(not hit["mock"] for hit in sources["drive"].search(""))
+    assert sources["google_docs"].fetch("doc1abcdefgh").mock is False
 
 
 def test_live_mode_without_connection_returns_nothing(monkeypatch):
@@ -146,7 +147,7 @@ def test_live_mode_without_connection_returns_nothing(monkeypatch):
     assert sources["google_calendar"].list_upcoming_events(5) == []
     assert sources["notion"].search("x") == []
     with pytest.raises(ConnectorAuthError):
-        sources["drive"].fetch("doc1")
+        sources["google_docs"].fetch("doc1abcdefgh")
 
 
 def test_explicit_mock_mode_overrides_connection(monkeypatch):
@@ -271,10 +272,10 @@ def test_expired_access_token_is_refreshed():
 def test_401_triggers_one_refresh_and_retry():
     connectors, fake, secrets = _google()
     _store_tokens(secrets, access="revoked_access")  # not expired, but server rejects it
-    hits = build_sources(connectors)["drive"].search("kickoff")
-    assert [hit["id"] for hit in hits] == ["doc1"]
+    item = build_sources(connectors)["google_docs"].fetch("doc1abcdefgh")
+    assert item.title == "Kickoff SOW"
     paths = [request.url.path for request in fake.requests]
-    assert paths == ["/drive/v3/files", "/token", "/drive/v3/files"]
+    assert paths == ["/v1/documents/doc1abcdefgh", "/token", "/v1/documents/doc1abcdefgh"]
 
 
 def test_revoked_refresh_token_disconnects_and_never_falls_back_to_mock():
@@ -282,9 +283,9 @@ def test_revoked_refresh_token_disconnects_and_never_falls_back_to_mock():
     fake.refresh_ok = False
     connectors, _fake, secrets = _google(fake=fake)
     _store_tokens(secrets, access="stale", expires_at=time.time() - 10)
-    source = build_sources(connectors)["drive"]
+    source = build_sources(connectors)["google_docs"]
     with pytest.raises(ConnectorAuthError):
-        source.search("kickoff")
+        source.fetch("doc1abcdefgh")
     assert secrets.get(google_auth.TOKEN_KEY) is None
     row = connectors.status()["providers"][0]
     assert row["connected"] is False and row["account"] is None
@@ -320,19 +321,16 @@ def test_calendar_maps_events_and_caches():
     assert len(fake.requests) == 1
 
 
-def test_drive_search_escapes_query_and_fetch_exports_doc():
+def test_google_docs_link_import_reads_doc_through_the_docs_api():
     connectors, fake, secrets = _google()
     _store_tokens(secrets)
-    drive = build_sources(connectors)["drive"]
-    hits = drive.search("Bob's \\ plan")
-    assert [hit["id"] for hit in hits] == ["doc1"]
-    q = fake.requests[0].url.params["q"]
-    assert "name contains 'Bob\\'s \\\\ plan'" in q and "trashed = false" in q
-    item = drive.fetch("doc1")
-    assert item.source_kind == "drive" and item.title == "Kickoff SOW" and item.mock is False
-    headings = [section.heading for section in item.sections]
-    assert headings == ["Kickoff SOW", "2.1 Payments"]
+    docs = build_sources(connectors)["google_docs"]
+    item = docs.fetch("https://docs.google.com/document/d/doc1abcdefgh/edit?usp=sharing")
+    assert item.source_kind == "google_docs" and item.source_label == "Google Docs"
+    assert item.title == "Kickoff SOW" and item.mock is False and item.external_id == "doc1abcdefgh"
+    assert [section.heading for section in item.sections] == ["Kickoff SOW", "2.1 Payments"]
     assert item.sections[0].body == "Intro line."
+    assert [r.url.path for r in fake.requests] == ["/v1/documents/doc1abcdefgh"]
 
 
 # ---- Notion -----------------------------------------------------------------
@@ -443,8 +441,34 @@ def test_status_contract_and_no_token_leak(tmp_path: Path):
     assert [row["id"] for row in status["providers"]] == ["google", "notion"]
     for row in status["providers"]:
         assert {"id", "label", "connected", "account", "mode", "configured", "setup_hint"} <= set(row)
-        assert set(row) - {"id", "label", "connected", "account", "mode", "configured", "setup_hint"} <= {"credentials_source", "has_client_secret"}
+        assert set(row) - {"id", "label", "connected", "account", "mode", "configured", "setup_hint"} <= {
+            "credentials_source",
+            "has_client_secret",
+            "capabilities",
+            "save_notes",
+            "needs_consent",
+            "consent_pending",
+            "needs_docs_consent",
+            "targets",
+            "docs_consent_pending",
+            "parent",
+            "needs_parent",
+            "needs_capabilities",
+            "has_api_key",
+            "consent",
+        }
     google = status["providers"][0]
+    assert google["capabilities"] == {
+        "read": True,
+        "read_docs": True,
+        "read_sheets": False,
+        "read_slides": False,
+        "pick_drive_files": False,
+        "write_notes": False,
+    }
+    assert google["consent"] == {"docs": "granted", "sheets": "not_granted", "slides": "not_granted", "drive_files": "not_granted", "notes": "not_granted"}
+    assert google["needs_docs_consent"] is False
+    assert google["save_notes"] is False and google["needs_consent"] is False
     assert google["connected"] is True and google["account"] == "me@example.com" and google["mode"] == "live" and google["configured"] is True
     notion = status["providers"][1]
     assert notion["connected"] is False and notion["account"] is None and notion["mode"] == "mock"

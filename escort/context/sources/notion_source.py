@@ -16,10 +16,12 @@ from escort.context.models import ContextItem
 from escort.context.sources.base import (
     ConnectorAuthError,
     ConnectorError,
+    ConnectorScopeError,
     ConnectorSetupError,
 )
 from escort.store import new_id
 
+INTEGRATIONS_URL = "https://www.notion.so/profile/integrations"
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 TOKEN_KEY = "notion_oauth_token"
@@ -131,9 +133,23 @@ class NotionClient:
         except ValueError:
             payload = {}
         if response.status_code >= 400:
+            code = str(payload.get("code") or "") if isinstance(payload, dict) else ""
+            if response.status_code == 403 or code == "restricted_resource":
+                raise ConnectorScopeError(
+                    PROVIDER,
+                    "Notion blocked this (restricted_resource). In notion.so/profile/integrations give your "
+                    "integration the 'Insert content' and 'Update content' capabilities, and share the page with it "
+                    "(page menu > Connections), then try again.",
+                    code="needs_capabilities",
+                    help_url=INTEGRATIONS_URL,
+                )
             message = payload.get("message") or response.status_code
             if response.status_code == 404:
-                message = "Page not found, or not shared with the Escort integration"
+                raise ConnectorError(
+                    PROVIDER,
+                    "Notion error: Page not found, or not shared with the Escort integration (page menu > Connections)",
+                    code="not_found",
+                )
             raise ConnectorError(PROVIDER, f"Notion error: {message}")
         return payload
 

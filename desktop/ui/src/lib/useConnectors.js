@@ -6,7 +6,7 @@ const POLL_LIMIT_MS = 120000;
 
 // Used when the backend has not shipped the connectors API yet.
 const FALLBACK = [
-  { id: "google", label: "Google (Calendar + Drive)", connected: false, account: "", mode: "mock", configured: false, setup_hint: "" },
+  { id: "google", label: "Google (Calendar + Docs)", connected: false, account: "", mode: "mock", configured: false, setup_hint: "" },
   { id: "notion", label: "Notion", connected: false, account: "", mode: "mock", configured: false, setup_hint: "" },
 ];
 
@@ -64,13 +64,13 @@ export function useConnectors({ onChange } = {}) {
   }, [load]);
 
   const poll = useCallback(
-    (id) => {
+    (id, done = (p) => p?.connected) => {
       stopPolling(id);
       const started = Date.now();
       timers.current[id] = setInterval(async () => {
         const list = await load();
         const hit = list?.find((p) => p.id === id);
-        if (hit?.connected) {
+        if (done(hit)) {
           stopPolling(id);
           setFlag(setBusy, id);
           setFlag(setAuthUrls, id);
@@ -99,14 +99,102 @@ export function useConnectors({ onChange } = {}) {
     }
   }, [poll]);
 
+  const canWrite = (p) => Boolean(p?.capabilities?.write_notes);
+
+  /** "Allow Docs access": sign in again so Google grants documents.readonly to an older connection. */
+  const allowDocsAccess = useCallback(async () => {
+    setFlag(setErrors, "google");
+    setFlag(setBusy, "google", "consenting");
+    try {
+      const data = await post("/api/connectors/google/connect");
+      if (data?.auth_url) setFlag(setAuthUrls, "google", data.auth_url);
+      poll("google", (p) => Boolean(p?.capabilities?.read_docs));
+    } catch (err) {
+      setFlag(setBusy, "google");
+      setFlag(setErrors, "google", err.message || "Could not open Google's consent page.");
+    }
+  }, [poll]);
+
+  /** "Choose a page to keep updated" / remove it. Remembers the pick only; no write to Notion. */
+  const setNotionTarget = useCallback(async ({ add, remove }) => {
+    setFlag(setErrors, "notion");
+    try {
+      const data = await post("/api/connectors/notion/targets", add ? { add } : { remove });
+      if (Array.isArray(data?.providers)) setProviders(data.providers);
+      onChangeRef.current?.();
+      return true;
+    } catch (err) {
+      setFlag(setErrors, "notion", err.message || "Could not change the pages to keep updated.");
+      return false;
+    }
+  }, []);
+
+  /** "Save notes to Drive" on/off. On without the Docs scopes opens Google's consent page. */
+  const setSaveNotes = useCallback(
+    async (enabled) => {
+      setFlag(setErrors, "google");
+      setFlag(setBusy, "google", "notes");
+      try {
+        const data = await post("/api/connectors/google/notes", { enabled });
+        if (Array.isArray(data?.providers)) setProviders(data.providers);
+        if (data?.auth_url) {
+          setFlag(setAuthUrls, "google", data.auth_url);
+          setFlag(setBusy, "google", "consenting");
+          poll("google", canWrite);
+          return;
+        }
+        setFlag(setBusy, "google");
+        onChangeRef.current?.();
+      } catch (err) {
+        setFlag(setBusy, "google");
+        setFlag(setErrors, "google", err.message || "Could not change note saving.");
+      }
+    },
+    [poll],
+  );
+
+  /** "Allow note saving": ask Google for drive.file + documents only. */
+  const allowNoteSaving = useCallback(async () => {
+    setFlag(setErrors, "google");
+    setFlag(setBusy, "google", "consenting");
+    try {
+      const data = await post("/api/connectors/google/consent");
+      if (data?.auth_url) setFlag(setAuthUrls, "google", data.auth_url);
+      poll("google", canWrite);
+    } catch (err) {
+      setFlag(setBusy, "google");
+      setFlag(setErrors, "google", err.message || "Could not open Google's consent page.");
+    }
+  }, [poll]);
+
+  /** "Save notes to Notion" on/off, and the parent page Escort writes under. No network to Notion. */
+  const setNotionNotes = useCallback(async ({ enabled, parentId, parentTitle }) => {
+    setFlag(setErrors, "notion");
+    setFlag(setBusy, "notion", "notes");
+    try {
+      const body = { enabled };
+      if (parentId) Object.assign(body, { parent_id: parentId, parent_title: parentTitle });
+      const data = await post("/api/connectors/notion/notes", body);
+      if (Array.isArray(data?.providers)) setProviders(data.providers);
+      onChangeRef.current?.();
+      return true;
+    } catch (err) {
+      setFlag(setErrors, "notion", err.message || "Could not change note saving.");
+      return false;
+    } finally {
+      setFlag(setBusy, "notion");
+    }
+  }, []);
+
   const saveGoogleCredentials = useCallback(
-    async ({ clientId, clientSecret }) => {
+    async ({ clientId, clientSecret, apiKey = "" }) => {
       setFlag(setErrors, "google");
       setFlag(setBusy, "google", "saving");
       try {
         const body = {};
         if (clientId.trim()) body.google_client_id = clientId.trim();
         if (clientSecret.trim()) body.google_client_secret = clientSecret.trim();
+        if (apiKey.trim()) body.google_api_key = apiKey.trim();
         await post("/api/setup", body);
         await load();
         return true;
@@ -167,5 +255,22 @@ export function useConnectors({ onChange } = {}) {
     [stopPolling],
   );
 
-  return { providers, unavailable, busy, errors, authUrls, connectGoogle, saveGoogleCredentials, connectNotion, disconnect, cancelWait, reload: load };
+  return {
+    providers,
+    unavailable,
+    busy,
+    errors,
+    authUrls,
+    connectGoogle,
+    setSaveNotes,
+    allowNoteSaving,
+    allowDocsAccess,
+    setNotionTarget,
+    setNotionNotes,
+    saveGoogleCredentials,
+    connectNotion,
+    disconnect,
+    cancelWait,
+    reload: load,
+  };
 }

@@ -1,25 +1,37 @@
 import { useState } from "react";
-import { CheckCircle, GoogleLogo, NotionLogo, Plugs, ArrowSquareOut, CaretDown } from "@phosphor-icons/react";
-import { Button, Pill } from "./ui.jsx";
+import {
+  ArrowSquareOut,
+  CaretDown,
+  CheckCircle,
+  FileText,
+  GoogleLogo,
+  MagnifyingGlass,
+  NotionLogo,
+  Plugs,
+  ShieldCheck,
+} from "@phosphor-icons/react";
+import { Button, Pill, Toggle } from "./ui.jsx";
+import { post } from "../lib/api.js";
 import { useConnectors } from "../lib/useConnectors.js";
 
 const META = {
   google: {
     name: "Google",
-    scope: "Calendar + Drive",
+    scope: "Calendar + Docs, Sheets, Slides, Drive picks",
     Icon: GoogleLogo,
-    blurb: "Pulls your upcoming calls and the docs shared around them.",
+    blurb: "Connect your own account. Reads your upcoming calls, the Google links you paste, and the Drive files you pick.",
     // Shown until Google app credentials are saved.
     setupSteps: [
       "In Google Cloud Console, create a project.",
-      "Enable the Google Calendar API and the Google Drive API.",
-      "Configure the OAuth consent screen and add yourself as a test user.",
+      "Enable the Google Calendar, Docs, Sheets, Slides, Drive and Google Picker APIs.",
+      "Configure the OAuth consent screen and add yourself (and anyone testing) as a test user. Scopes: calendar.readonly and documents.readonly; spreadsheets.readonly, presentations.readonly and drive.file are asked for only when first used; documents only for saving notes.",
       "Create an OAuth client of type Desktop app.",
-      "Paste its Client ID and Client secret below, then save.",
+      "For Pick from Drive: create an API key and restrict it to the Google Picker API.",
+      "Paste the Client ID, Client secret and API key below, then save. They stay on this computer.",
     ],
     steps: [
       "Press Connect Google. Your browser opens Google's sign-in.",
-      "Pick your work account and allow read-only Calendar and Drive access.",
+      "Sign in with your own Google account and allow read-only Calendar and Docs access. Sheets, Slides, Drive file picking and note saving are each asked separately, the first time you use them.",
       "Come back here. Escort detects the sign-in on its own.",
     ],
   },
@@ -27,10 +39,11 @@ const META = {
     name: "Notion",
     scope: "Pages + databases",
     Icon: NotionLogo,
-    blurb: "Searches the pages you share with Escort for scope notes.",
+    blurb: "Connect your own workspace. Searches the pages you share with Escort for scope notes.",
     steps: [
-      "Open notion.so/profile/integrations and create an internal integration.",
+      "Open notion.so/profile/integrations and create an internal integration in your own workspace.",
       "Copy its token, then share the pages you want with that integration.",
+      "To save or update notes too: under Capabilities tick Insert content and Update content, and share the pages notes should go to.",
       "Paste the token below and press Connect Notion.",
     ],
   },
@@ -64,7 +77,8 @@ export default function ConnectAccounts({ onChange, compact = false }) {
           ))}
         </div>
       ) : (
-        <div className="grid items-start gap-3 md:grid-cols-2">
+        // Equal cells: both cards stretch to the taller one; each card pins its actions to the bottom.
+        <div className="grid items-stretch gap-3 md:grid-cols-2">
           {list.map((p) => (
             <ProviderCard key={p.id} provider={p} ctl={c} />
           ))}
@@ -81,6 +95,7 @@ function ProviderCard({ provider, ctl }) {
   const error = ctl.errors[provider.id];
   const authUrl = ctl.authUrls[provider.id];
   const [token, setToken] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const demo = provider.mode === "mock";
   const isGoogle = provider.id === "google";
   const needsCredentials = isGoogle && !provider.configured;
@@ -92,9 +107,11 @@ function ProviderCard({ provider, ctl }) {
     if (await ctl.connectNotion(token.trim())) setToken("");
   }
 
+  const live = provider.connected && !demo;
+
   return (
-    <article className="rounded-[22px] bg-white/[0.025] p-5 hairline">
-      <header className="flex items-start gap-3">
+    <article className="flex h-full flex-col rounded-[22px] bg-white/[0.025] p-5 hairline">
+      <header className="flex min-h-10 items-start gap-3">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/[0.05] hairline">
           <Icon size={20} aria-hidden />
         </span>
@@ -109,31 +126,30 @@ function ProviderCard({ provider, ctl }) {
         )}
       </header>
 
-      {provider.connected ? (
-        <div className="mt-4">
-          <p className="flex items-center gap-2 text-sm">
+      {/* Status row: one line in every state so both cards line up below it. */}
+      <p className="mt-4 flex min-h-6 items-center gap-2 text-sm">
+        {provider.connected ? (
+          <>
             <CheckCircle size={18} weight="regular" className={demo ? "text-warn" : "text-commit"} aria-hidden />
             <span className="min-w-0 truncate font-medium">{provider.account || "Account connected"}</span>
-          </p>
+          </>
+        ) : (
+          <span className="text-muted">{meta.blurb}</span>
+        )}
+      </p>
+
+      <div className={provider.connected ? "" : "flex flex-1 flex-col"}>
+      {provider.connected ? (
+        <div>
           {demo ? (
             <p className="mt-2 text-xs leading-relaxed text-muted">
               This is fictional demo content (BayaniPay fixtures), not your real {meta.name}.
             </p>
           ) : null}
-          <Button
-            variant="dangerGhost"
-            size="sm"
-            className="mt-4"
-            disabled={busy === "disconnecting"}
-            onClick={() => ctl.disconnect(provider.id)}
-          >
-            {busy === "disconnecting" ? "Disconnecting…" : `Disconnect ${meta.name}`}
-          </Button>
+          {isGoogle && live && provider.needs_docs_consent ? <DocsConsent provider={provider} ctl={ctl} /> : null}
         </div>
       ) : (
-        <div className="mt-4">
-          <p className="text-sm text-muted">{meta.blurb}</p>
-
+        <div>
           <ol className="mt-4 space-y-2.5">
             {steps.map((text, i) => (
               <li key={text} className="flex gap-3 text-sm leading-snug">
@@ -148,7 +164,7 @@ function ProviderCard({ provider, ctl }) {
           {needsCredentials ? <GoogleCredentials provider={provider} ctl={ctl} /> : null}
 
           {provider.id === "notion" ? (
-            <form onSubmit={submitToken} className="mt-4 space-y-2">
+            <form id="notion-token-form" onSubmit={submitToken} className="mt-4">
               <label className="block">
                 <span className="text-xs font-medium">Integration token</span>
                 <input
@@ -160,37 +176,63 @@ function ProviderCard({ provider, ctl }) {
                   className="field mt-1.5 h-11 w-full px-4 text-sm"
                 />
               </label>
-              <Button type="submit" variant="primary" disabled={!token.trim() || busy === "connecting"}>
-                <Plugs size={16} aria-hidden />
-                {busy === "connecting" ? "Checking token…" : "Connect Notion"}
-              </Button>
             </form>
-          ) : (
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <Button variant="primary" disabled={Boolean(busy) || needsCredentials} onClick={ctl.connectGoogle}>
-                <Plugs size={16} aria-hidden />
-                {busy === "connecting" ? "Opening browser…" : busy === "waiting" ? "Waiting for Google…" : "Connect Google"}
-              </Button>
-              {busy === "waiting" ? (
-                <div className="flex items-center gap-3 text-xs">
-                  {authUrl ? (
-                    <a className="inline-flex items-center gap-1 font-medium text-[#c6bfff] underline-offset-4 hover:underline" href={authUrl} target="_blank" rel="noreferrer">
-                      Open sign-in again <ArrowSquareOut size={14} aria-hidden />
-                    </a>
-                  ) : null}
-                  <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
-                    Cancel
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          )}
+          ) : null}
         </div>
       )}
+      </div>
 
-      {isGoogle && provider.configured ? <GoogleCredentials provider={provider} ctl={ctl} advanced /> : null}
+      {/* Capability row: same slot in both cards. Connected, it fills the card so both boxes share top
+          and bottom edges; otherwise it sits just above the footer. */}
+      <div className={provider.connected ? "flex flex-1 flex-col pt-4 [&>*]:flex-1" : "mt-auto pt-4"}>
+        {isGoogle ? <SaveNotes provider={provider} ctl={ctl} live={live} /> : <NotionSaveNotes provider={provider} ctl={ctl} live={live} />}
+      </div>
 
-      {busy === "waiting" ? (
+      <footer className="mt-4 flex min-h-8 flex-wrap items-center justify-between gap-3">
+        {provider.connected ? (
+          <Button variant="dangerGhost" size="sm" disabled={busy === "disconnecting"} onClick={() => ctl.disconnect(provider.id)}>
+            {busy === "disconnecting" ? "Disconnecting…" : `Disconnect ${meta.name}`}
+          </Button>
+        ) : isGoogle ? (
+          <>
+            <Button variant="primary" disabled={Boolean(busy) || needsCredentials} onClick={ctl.connectGoogle}>
+              <Plugs size={16} aria-hidden />
+              {busy === "connecting" ? "Opening browser…" : busy === "waiting" ? "Waiting for Google…" : "Connect Google"}
+            </Button>
+            {busy === "waiting" ? (
+              <div className="flex items-center gap-3 text-xs">
+                {authUrl ? (
+                  <a className={`inline-flex items-center gap-1 ${LINK}`} href={authUrl} target="_blank" rel="noreferrer">
+                    Open sign-in again <ArrowSquareOut size={14} aria-hidden />
+                  </a>
+                ) : null}
+                <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
+                  Cancel
+                </button>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <Button type="submit" form="notion-token-form" variant="primary" disabled={!token.trim() || busy === "connecting"}>
+            <Plugs size={16} aria-hidden />
+            {busy === "connecting" ? "Checking token…" : "Connect Notion"}
+          </Button>
+        )}
+        {isGoogle && provider.configured ? (
+          <button
+            type="button"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-ink"
+          >
+            <CaretDown size={13} className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`} aria-hidden />
+            Advanced
+          </button>
+        ) : null}
+      </footer>
+      {isGoogle && provider.configured && advancedOpen ? <GoogleCredentials provider={provider} ctl={ctl} advanced /> : null}
+
+      {busy === "waiting" && !provider.connected ? (
         <p className="mt-3 text-xs text-muted" role="status">
           Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes.
         </p>
@@ -204,8 +246,290 @@ function ProviderCard({ provider, ctl }) {
   );
 }
 
+/** Shared shell for the optional write capability, so both cards render it identically. */
+function CapabilityRow({ title, body, checked, onChange, disabled, note, children }) {
+  return (
+    <div className="rounded-2xl bg-white/[0.03] p-4 hairline">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <FileText size={16} className="text-muted" aria-hidden />
+            {title}
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted text-pretty">{body}</p>
+        </div>
+        <Toggle checked={checked} onChange={onChange} label={title} disabled={disabled} />
+      </div>
+      {note ? <p className="mt-3 text-xs text-faint">{note}</p> : null}
+      {children}
+    </div>
+  );
+}
+
+const LINK = "font-medium text-[#c6bfff] underline-offset-4 hover:underline";
+
+/** Connected before Docs reading existed (or the Docs box was unticked): reconnect to allow it. */
+function DocsConsent({ provider, ctl }) {
+  const busy = ctl.busy.google;
+  const waiting = busy === "consenting" || provider.docs_consent_pending;
+  const authUrl = ctl.authUrls.google;
+  return (
+    <div className="mt-3 rounded-xl bg-warn-soft px-3.5 py-3" role="status">
+      <p className="text-xs leading-relaxed text-warn">
+        {waiting
+          ? "Waiting for Google. Finish allowing Docs access in your browser."
+          : "Google has not allowed reading Docs yet. Reconnect to allow it, so you can import a Google Docs link."}
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-3">
+        <Button size="sm" variant="accent" onClick={ctl.allowDocsAccess} disabled={busy === "consenting"}>
+          <ShieldCheck size={14} aria-hidden />
+          {busy === "consenting" ? "Waiting for Google…" : "Allow Docs access"}
+        </Button>
+        {busy === "consenting" ? (
+          <>
+            {authUrl ? (
+              <a className={`inline-flex items-center gap-1 text-xs ${LINK}`} href={authUrl} target="_blank" rel="noreferrer">
+                Open Google again <ArrowSquareOut size={13} aria-hidden />
+              </a>
+            ) : null}
+            <button type="button" className="text-xs font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait("google")}>
+              Cancel
+            </button>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+const REVOKE_URL = "https://myaccount.google.com/permissions";
+
+/**
+ * Optional write access. Off by default; turning it on asks Google only for drive.file +
+ * documents, so Escort can touch nothing but the Docs it creates.
+ */
+function SaveNotes({ provider, ctl, live }) {
+  const on = live && Boolean(provider.save_notes);
+  const canWrite = Boolean(provider.capabilities?.write_notes);
+  const busy = ctl.busy.google;
+  const consenting = busy === "consenting" || provider.consent_pending;
+  const needsConsent = on && !canWrite;
+  const authUrl = ctl.authUrls.google;
+
+  return (
+    <CapabilityRow
+      title="Save notes to Drive"
+      body="Escort can create and edit only Google Docs it creates or that you pick. It never touches your other files."
+      checked={on}
+      onChange={ctl.setSaveNotes}
+      disabled={!live || busy === "notes"}
+      note={live ? null : provider.connected ? "Not available with demo data." : "Available after you connect Google."}
+    >
+      {on && canWrite ? (
+        <p className="mt-3 flex gap-2 text-xs leading-relaxed text-ink/80">
+          <CheckCircle size={15} className="mt-px shrink-0 text-commit" aria-hidden />
+          <span>
+            On. Each meeting gets one Google Doc, “Escort · meeting · date”, in an <span className="font-medium text-ink">Escort</span> folder.
+            Escort writes only when you press Note it or Save to Google Docs.
+          </span>
+        </p>
+      ) : null}
+
+      {needsConsent ? (
+        <div className="mt-3 rounded-xl bg-warn-soft px-3.5 py-3" role="status">
+          <p className="text-xs font-medium text-warn">
+            {consenting ? "Waiting for Google. Finish allowing note saving in your browser." : "Google has not allowed note saving yet."}
+          </p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-3">
+            <Button size="sm" variant="accent" onClick={ctl.allowNoteSaving} disabled={busy === "consenting"}>
+              <ShieldCheck size={14} aria-hidden />
+              {busy === "consenting" ? "Waiting for Google…" : "Allow note saving"}
+            </Button>
+            {busy === "consenting" ? (
+              <>
+                {authUrl ? (
+                  <a className={`inline-flex items-center gap-1 text-xs ${LINK}`} href={authUrl} target="_blank" rel="noreferrer">
+                    Open Google again <ArrowSquareOut size={13} aria-hidden />
+                  </a>
+                ) : null}
+                <button type="button" className="text-xs font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait("google")}>
+                  Cancel
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {live && !on && canWrite ? (
+        <p className="mt-3 text-xs leading-relaxed text-muted">
+          Off. Escort no longer writes to Drive. To remove its access entirely,{" "}
+          <a className={LINK} href={REVOKE_URL} target="_blank" rel="noreferrer">
+            Revoke Google access
+          </a>
+          .
+        </p>
+      ) : null}
+    </CapabilityRow>
+  );
+}
+
+const INTEGRATIONS_URL = "https://www.notion.so/profile/integrations";
+
+/**
+ * Optional Notion writes with the same integration token. Escort creates one child page per
+ * meeting under a parent the user picks here, and writes nowhere else.
+ */
+function NotionSaveNotes({ provider, ctl, live }) {
+  const on = live && Boolean(provider.save_notes);
+  const parent = provider.parent;
+  const busy = ctl.busy.notion === "notes";
+  const [picking, setPicking] = useState(false);
+  const showPicker = on && (!parent || picking);
+
+  async function choose(hit) {
+    if (await ctl.setNotionNotes({ enabled: true, parentId: hit.id, parentTitle: hit.title })) setPicking(false);
+  }
+
+  return (
+    <CapabilityRow
+      title="Save notes to Notion"
+      body="Escort creates one page per meeting under a parent page you pick, and can update existing pages you choose below. It never writes anywhere else."
+      checked={on}
+      onChange={(enabled) => ctl.setNotionNotes({ enabled })}
+      disabled={!live || busy}
+      note={live ? null : provider.connected ? "Not available with demo data." : "Available after you connect Notion."}
+    >
+      {on && parent && !picking ? (
+        <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-ink/80">
+          <CheckCircle size={15} className="shrink-0 text-commit" aria-hidden />
+          <span>
+            Saving under <span className="font-medium text-ink">{parent.title}</span>.
+          </span>
+          <button type="button" className={`text-xs ${LINK}`} onClick={() => setPicking(true)}>
+            Change
+          </button>
+        </p>
+      ) : null}
+      {showPicker ? <ParentPicker onPick={choose} onCancel={parent ? () => setPicking(false) : null} busy={busy} /> : null}
+      {live ? <KeepUpdated provider={provider} ctl={ctl} /> : null}
+      {on && provider.needs_capabilities ? (
+        <div className="mt-3 rounded-xl bg-warn-soft px-3.5 py-3" role="status">
+          <p className="text-xs leading-relaxed text-warn">
+            Notion blocked the last save. Give your integration the Insert content and Update content capabilities, then try again.
+          </p>
+          <a className={`mt-2 inline-flex items-center gap-1 text-xs ${LINK}`} href={INTEGRATIONS_URL} target="_blank" rel="noreferrer">
+            Open Notion integrations <ArrowSquareOut size={13} aria-hidden />
+          </a>
+        </div>
+      ) : null}
+    </CapabilityRow>
+  );
+}
+
+/** Existing pages the user picked to keep up to date. Only these (and Escort's own pages) can be edited. */
+function KeepUpdated({ provider, ctl }) {
+  const targets = provider.targets || [];
+  const [adding, setAdding] = useState(false);
+
+  async function add(hit) {
+    if (await ctl.setNotionTarget({ add: { id: hit.id, title: hit.title } })) setAdding(false);
+  }
+
+  return (
+    <div className="mt-3 border-t border-white/[0.06] pt-3">
+      <p className="text-xs font-medium">Pages to keep updated</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted">
+        Escort can add to or edit these existing pages when you ask. You review each change before it is written.
+      </p>
+      {targets.length ? (
+        <ul className="mt-2 space-y-1">
+          {targets.map((t) => (
+            <li key={t.id} className="flex items-center justify-between gap-3 text-[13px]">
+              <span className="min-w-0 truncate">{t.title}</span>
+              <button type="button" className="shrink-0 text-xs font-medium text-muted hover:text-conflict" onClick={() => ctl.setNotionTarget({ remove: t.id })}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {adding ? (
+        <ParentPicker title="Choose a page to keep updated" actionLabel="Keep this page updated" onPick={add} onCancel={() => setAdding(false)} busy={false} />
+      ) : (
+        <button type="button" className={`mt-2 text-xs ${LINK}`} onClick={() => setAdding(true)}>
+          Choose a page to keep updated
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Pick a page from the same Notion search the Context screen uses. */
+function ParentPicker({ onPick, onCancel, busy, title = "Pick the page notes go under", actionLabel = "Use this page" }) {
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState(null);
+  const [error, setError] = useState("");
+
+  async function search(event) {
+    event?.preventDefault();
+    setError("");
+    try {
+      const data = await post("/api/context/search", { source: "notion", query });
+      setHits((data?.hits || []).filter((hit) => !hit.mock));
+    } catch (err) {
+      setError(err.message || "Could not search Notion.");
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <p className="text-xs font-medium">{title}</p>
+      <form onSubmit={search} className="mt-1.5 flex gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search pages shared with Escort"
+          aria-label="Search Notion pages"
+          className="field h-9 min-w-0 flex-1 px-3.5 text-[13px]"
+        />
+        <Button type="submit" size="sm">
+          <MagnifyingGlass size={14} aria-hidden /> Search
+        </Button>
+      </form>
+      {hits !== null ? (
+        hits.length ? (
+          <ul className="mt-2 max-h-40 space-y-1 overflow-auto scroll-thin">
+            {hits.map((hit) => (
+              <li key={hit.id}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPick(hit)}
+                  className="press flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-[13px] hover:bg-white/[0.05] disabled:opacity-45"
+                >
+                  <span className="min-w-0 truncate">{hit.title}</span>
+                  <span className="shrink-0 text-xs text-[#c6bfff]">{actionLabel}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-xs text-muted">No pages found. Share the page with your integration (page menu &gt; Connections), then search again.</p>
+        )
+      ) : null}
+      {error ? <p className="mt-2 text-xs text-conflict">{error}</p> : null}
+      {onCancel ? (
+        <button type="button" className="mt-2 text-xs font-medium text-muted hover:text-ink" onClick={onCancel}>
+          Cancel
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 const SOURCE_NOTE = {
   env: "Using credentials from the ESCORT_GOOGLE_CLIENT_ID environment variable.",
+  user_file: "Using the google_client.json in your Escort folder (%APPDATA%\\Escort).",
   bundled: "Using the credentials supplied with this installer.",
   setup: "Using the credentials you saved here.",
 };
@@ -217,18 +541,23 @@ const SOURCE_NOTE = {
 function GoogleCredentials({ provider, ctl, advanced = false }) {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [justSaved, setJustSaved] = useState(false);
   const saving = ctl.busy.google === "saving";
   const secretSaved = Boolean(provider.has_client_secret);
+  const keySaved = Boolean(provider.has_api_key);
   const source = provider.credentials_source;
-  const canSave = Boolean(clientId.trim() || clientSecret.trim()) && !saving;
+  // A key saved here only applies to credentials saved here (or the env var); files carry their own api_key.
+  const keyEditable = !source || source === "setup" || source === "env";
+  const canSave = Boolean(clientId.trim() || clientSecret.trim() || apiKey.trim()) && !saving;
 
   async function submit(event) {
     event.preventDefault();
     if (!canSave) return;
-    if (await ctl.saveGoogleCredentials({ clientId, clientSecret })) {
+    if (await ctl.saveGoogleCredentials({ clientId, clientSecret, apiKey })) {
       setClientId("");
       setClientSecret("");
+      setApiKey("");
       setJustSaved(true);
     }
   }
@@ -278,6 +607,38 @@ function GoogleCredentials({ provider, ctl, advanced = false }) {
           className="field mt-1.5 h-11 w-full px-4 text-sm"
         />
       </label>
+      {keyEditable ? (
+        <label className="block">
+          <span className="flex items-center justify-between text-xs font-medium">
+            API key for the Drive file chooser
+            {keySaved ? (
+              <span className="inline-flex items-center gap-1 font-normal text-commit">
+                <CheckCircle size={13} aria-hidden /> Key saved
+              </span>
+            ) : (
+              <span className="font-normal text-faint">Optional</span>
+            )}
+          </span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(e) => {
+              setApiKey(e.target.value);
+              setJustSaved(false);
+            }}
+            placeholder={keySaved ? "Paste a new key to replace it" : "AIza…"}
+            className="field mt-1.5 h-11 w-full px-4 text-sm"
+          />
+          <span className="mt-1.5 block text-xs leading-relaxed text-muted">
+            Needed only for Pick from Drive. Create it in the same project and restrict it to the Google Picker API.
+          </span>
+        </label>
+      ) : (
+        <p className="text-xs leading-relaxed text-muted">
+          {keySaved ? "Drive file chooser: API key found in the same credentials file." : "Drive file chooser: add an \"api_key\" entry to the same google_client.json to enable Pick from Drive."}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" variant={advanced ? "ghost" : "primary"} size={advanced ? "sm" : undefined} disabled={!canSave}>
           {saving ? "Saving…" : "Save credentials"}
@@ -293,15 +654,10 @@ function GoogleCredentials({ provider, ctl, advanced = false }) {
 
   if (!advanced) return <div className="mt-4 rounded-2xl bg-white/[0.03] p-4 hairline">{form}</div>;
   return (
-    <details className="group mt-4">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
-        <CaretDown size={13} className="transition-transform group-open:rotate-180" aria-hidden />
-        Advanced: Google app credentials
-      </summary>
-      <div className="mt-3 rounded-2xl bg-white/[0.03] p-4 hairline">
-        {SOURCE_NOTE[source] ? <p className="mb-3 text-xs text-muted">{SOURCE_NOTE[source]}</p> : null}
-        {form}
-      </div>
-    </details>
+    <div className="mt-3 rounded-2xl bg-white/[0.03] p-4 hairline" aria-label="Advanced: Google app credentials">
+      <p className="mb-2 text-xs font-medium">Google app credentials</p>
+      {SOURCE_NOTE[source] ? <p className="mb-3 text-xs text-muted">{SOURCE_NOTE[source]}</p> : null}
+      {form}
+    </div>
   );
 }

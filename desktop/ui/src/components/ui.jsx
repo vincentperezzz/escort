@@ -132,6 +132,7 @@ export function Chip({ children, onClick, tone = "neutral", className = "", ...r
     neutral: "bg-white/[0.05] text-ink/90 hairline hover:bg-white/[0.09] hover:text-ink",
     accent: "bg-accent-soft text-[#c6bfff] hover:bg-[rgba(139,124,255,0.22)]",
     conflict: "bg-conflict-soft text-[#ffb3a7] hover:bg-[rgba(255,106,85,0.2)]",
+    commit: "bg-commit-soft text-commit hover:bg-[rgba(93,228,181,0.2)]",
   };
   return (
     <button

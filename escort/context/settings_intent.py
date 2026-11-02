@@ -21,6 +21,8 @@ from escort.capture.monitors import ALL, PRIMARY, option_list, primary_of
 from escort.desktop.overlay import MAX_OPACITY, MIN_OPACITY, clamp_opacity
 
 PENDING_MONITOR = "watch_monitor"
+PENDING_SAVE_SUMMARY = "save_summary"
+PENDING_UPDATE_PAGE = "update_page"
 OPACITY_STEP = 0.15
 
 
@@ -287,6 +289,127 @@ def _share_intent(text: str, target: SettingsTarget) -> SettingsReply | None:
     return SettingsReply(reply=reply, changed=[{"setting": "hide_from_share", "value": wanted, "label": label}])
 
 
+# --- save summary to Google Docs (only after an explicit yes) ---------------------------
+
+_SAVE_VERB = r"\b(?:save|put|store|i-?save|isave|ilagay)\b"
+_SAVE_TARGET = r"\b(?:my notes|notes|google docs?|docs|gdocs|drive)\b"
+_YES = r"^(?:yes|yep|yeah|yup|sure|ok|okay|go ahead|go|do it|save it|confirm|please do|please|oo|opo|sige|g)\b"
+
+
+def _notes_intent(text: str, target: Any) -> SettingsReply | None:
+    if re.search(_ADVICE, text) or not (re.search(_SAVE_VERB, text) and re.search(_SAVE_TARGET, text)):
+        return None
+    if re.search(r"\b(?:summari[sz]e|what|which|ano)\b", text):
+        return None
+    status_of = getattr(target, "notes_save_status", None)
+    if status_of is None:
+        return None
+    status = status_of()
+    if not status.get("enabled"):
+        return SettingsReply(
+            reply="Note saving is off. Turn on Save notes to Drive (Connections > Google) or Save notes to Notion, then ask me again."
+        )
+    label = status.get("label") or "Google Docs"
+    if not status.get("connected"):
+        return SettingsReply(reply=f"{label} isn't connected. Connect it in Connections first.")
+    if status.get("blocked"):
+        return SettingsReply(reply=str(status["blocked"]))
+    summary = getattr(target, "summary_status", lambda: {})()
+    if summary.get("status") != "ready":
+        return SettingsReply(reply="There's no finished summary yet. Stop listening, or write one in Recap, then ask again.")
+    where = "add a new dated section to this meeting's" if status.get("doc") else "create this meeting's"
+    noun = "doc in your Escort folder" if label == "Google Docs" else "page under your chosen parent page"
+    if status.get("doc"):
+        noun = "doc" if label == "Google Docs" else "page"
+    return SettingsReply(
+        reply=f"Save the meeting summary to {label}? I'll {where} {noun}. Reply yes to save, or no to skip.",
+        pending={"kind": PENDING_SAVE_SUMMARY},
+    )
+
+
+def _resolve_save_summary(text: str, target: Any) -> SettingsReply | None:
+    if _words(text) > 6:
+        return None
+    if re.search(_CANCEL, text):
+        return SettingsReply(reply="OK, I won't save it.")
+    if not re.search(_YES, text):
+        return None
+    from escort.context.sources.base import ConnectorError
+
+    try:
+        result = target.save_notes_preferred("summary")
+    except ConnectorError as err:
+        return SettingsReply(reply=f"I couldn't save it: {err}")
+    doc = result.get("doc") or {}
+    label = "Notion" if result.get("destination") == "notion" else "Google Docs"
+    return SettingsReply(
+        reply=f"Saved to {label}: {doc.get('title') or 'your meeting notes'}. {doc.get('url') or ''}".strip(),
+        changed=[{"setting": f"notes_{result.get('destination') or 'drive'}", "value": doc.get("id"), "label": f"Summary saved to {label}"}],
+    )
+
+
+# --- update an existing Notion page (preview first, only after an explicit yes) ----------
+
+_UPDATE_VERB = r"\b(?:update|add (?:this|it) to|put (?:this|it) in|i-?update)\b"
+_UPDATE_TARGET = r"\b(?:page|notes|notion)\b"
+
+
+def _update_intent(text: str, target: Any) -> SettingsReply | None:
+    if re.search(_ADVICE, text) or not (re.search(_UPDATE_VERB, text) and re.search(_UPDATE_TARGET, text)):
+        return None
+    find = getattr(target, "notion_find_targets", None)
+    preview = getattr(target, "notion_update_preview", None)
+    if find is None or preview is None:
+        return None
+    picked = target.notion_targets()
+    if not picked:
+        return SettingsReply(
+            reply="No Notion page is picked to keep updated yet. In Connections > Notion use Choose a page to keep updated, then ask me again."
+        )
+    matches = find(text)
+    if not matches:
+        names = ", ".join(str(item["title"]) for item in picked)
+        return SettingsReply(reply=f"I couldn't tell which page you mean. The pages you picked: {names}. Say the page name.")
+    if len(matches) > 1:
+        names = ", ".join(str(item["title"]) for item in matches)
+        return SettingsReply(reply=f"That matches more than one page ({names}). Say which one.")
+    summary = getattr(target, "summary_status", lambda: {})()
+    if summary.get("status") != "ready":
+        return SettingsReply(reply="There's no finished summary yet. Stop listening, or write one in Recap, then ask again.")
+    from escort.context.sources.base import ConnectorError
+
+    try:
+        plan = preview(matches[0]["id"], "summary")
+    except ConnectorError as err:
+        return SettingsReply(reply=f"I couldn't read that page: {err}")
+    shown = " / ".join(str(line) for line in plan["lines"][:4])
+    return SettingsReply(
+        reply=f"{plan['summary']} {shown}. Reply yes to add it, or no to cancel. Nothing is written until you say yes.",
+        pending={"kind": PENDING_UPDATE_PAGE, "plan_id": plan["plan_id"]},
+    )
+
+
+def _resolve_update_page(text: str, target: Any, pending: dict[str, Any]) -> SettingsReply | None:
+    if _words(text) > 6:
+        return None
+    if re.search(_CANCEL, text):
+        target.notion_update_cancel(pending["plan_id"])
+        return SettingsReply(reply="OK, I won't change the page.")
+    if not re.search(_YES, text):
+        return None
+    from escort.context.sources.base import ConnectorError
+
+    try:
+        result = target.notion_update_confirm(pending["plan_id"])
+    except ConnectorError as err:
+        return SettingsReply(reply=f"I couldn't update it: {err}")
+    page = result.get("page") or {}
+    return SettingsReply(
+        reply=f"Updated {page.get('title') or 'your Notion page'}.",
+        changed=[{"setting": "notes_notion", "value": page.get("id"), "label": "Notion page updated"}],
+    )
+
+
 # --- entry point ------------------------------------------------------------------------
 
 
@@ -302,6 +425,20 @@ def handle_settings_message(
         answered = _resolve_pending(text, target, monitors)
         if answered is not None:
             return answered
+    if pending and pending.get("kind") == PENDING_SAVE_SUMMARY:
+        answered = _resolve_save_summary(text, target)
+        if answered is not None:
+            return answered
+    if pending and pending.get("kind") == PENDING_UPDATE_PAGE:
+        answered = _resolve_update_page(text, target, pending)
+        if answered is not None:
+            return answered
+    update = _update_intent(text, target)
+    if update is not None:
+        return update
+    notes = _notes_intent(text, target)
+    if notes is not None:
+        return notes
     replies = [
         reply
         for reply in (
@@ -337,6 +474,8 @@ def describe_settings(target: SettingsTarget) -> str:
         "'make the overlay more transparent'. "
         f"(3) hiding the overlay from screen share, now {'on' if target.hide_from_share else 'off'}; e.g. "
         "'hide the overlay from screen share' or 'show it in the share'. "
+        "(4) saving the meeting summary to Google Docs when Save notes to Drive is on: 'save summary to Docs' "
+        "(it asks the user to confirm first). "
         "Those requests are handled before you see them, so if you get one it was unclear: say which phrase works. "
         "Never claim you changed a setting yourself."
     )

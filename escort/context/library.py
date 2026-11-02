@@ -12,6 +12,8 @@ from escort.context.sources.base import ConnectorError, ConnectorSetupError
 from escort.context.sources.registry import Connectors, build_sources
 from escort.store import MeetingStore, new_id
 
+REFRESHABLE_KINDS = {"google_docs", "google_sheets", "google_slides", "google_drive"}
+
 
 class ContextLibrary:
     def __init__(
@@ -92,7 +94,20 @@ class ContextLibrary:
 
     def import_external(self, source_name: str, external_id: str) -> ContextItem:
         source = self._source(source_name)
-        item = source.fetch(external_id)
+        return self._replace_or_add(source.fetch(external_id))
+
+    def import_drive_file(self, file_id: str, mime_type: str = "", name: str = "") -> ContextItem:
+        """A file picked in Google's Drive chooser (drive.file: only that file is reachable)."""
+        return self._replace_or_add(self.connectors.fetch_drive_file(file_id, mime_type, name))
+
+    def _replace_or_add(self, item: ContextItem) -> ContextItem:
+        if item.source_kind in REFRESHABLE_KINDS and item.external_id:
+            # Importing the same Google file again refreshes the item instead of duplicating it.
+            self.data["items"] = [
+                raw
+                for raw in self.data.get("items") or []
+                if not (raw.get("source_kind") == item.source_kind and raw.get("external_id") == item.external_id)
+            ]
         return self.add_item(item)
 
     def connector_status(self) -> list[dict[str, Any]]:
@@ -154,7 +169,7 @@ class ContextLibrary:
             confirmed = {item.item_id for item in proposals[:2]}
         lines = [f"Prep for {event.title} ({event.start})", ""]
         if not confirmed:
-            lines.append("No context items matched yet. Add notes or connect Notion/Drive.")
+            lines.append("No context items matched yet. Add notes, connect Notion or paste a Google Docs, Sheets or Slides link.")
             return "\n".join(lines)
         by_id = {item.id: item for item in self.items()}
         for item_id in confirmed:

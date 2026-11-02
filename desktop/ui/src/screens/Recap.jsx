@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { ArrowsClockwise, Copy, Check, Sparkle } from "@phosphor-icons/react";
-import { Bezel, Button, Empty, PageHeader } from "../components/ui.jsx";
+import { ArrowsClockwise, ArrowSquareOut, Copy, Check, FileArrowUp, Sparkle } from "@phosphor-icons/react";
+import { Bezel, Button, Empty, PageHeader, Pill } from "../components/ui.jsx";
 import { Bubble } from "./Live.jsx";
 import { post } from "../lib/api.js";
 import { KIND } from "../lib/cards.js";
+import NoteDestination, { UpdatePreview } from "../components/NoteDestination.jsx";
+import { cancelNotePage, confirmNotePage, isPageDest, noteHint, previewNotePage, saveNote, useNoteDestination } from "../lib/notes.js";
 
 const TABS = [
   { id: "summary", label: "Summary" },
@@ -35,7 +37,9 @@ export default function Recap({ status, refresh, tab, go }) {
           </button>
         ))}
       </div>
-      {active === "summary" ? <SummaryView summary={summary} meeting={meeting} refresh={refresh} /> : null}
+      {active === "summary" ? (
+        <SummaryView summary={summary} meeting={meeting} refresh={refresh} status={status} go={go} />
+      ) : null}
       {active === "transcript" ? <TranscriptView turns={meeting.utterances || []} /> : null}
       {active === "cards" ? <CardsView meeting={meeting.meeting || {}} /> : null}
     </div>
@@ -50,11 +54,58 @@ function summaryText(s) {
   return lines.join("\n").trim();
 }
 
-function SummaryView({ summary, meeting, refresh }) {
+function SummaryView({ summary, meeting, refresh, status, go }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+  const [saved, setSaved] = useState({}); // dest -> doc, from this session's clicks
+  const [preview, setPreview] = useState(null); // an existing-page update waiting for Confirm
   const hasTranscript = (meeting.utterances || []).length > 0;
+  const destination = useNoteDestination(status);
+  const { dest, label, current } = destination;
+  const doc = saved[dest] || (current.summary_saved_at ? current.doc : null);
+
+  // User-clicked only. Re-saving appends a new dated section; it never overwrites.
+  async function saveSummary() {
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      if (isPageDest(dest)) {
+        setPreview({ dest, ...(await previewNotePage(dest, { kind: "summary" })) });
+        return;
+      }
+      const data = await saveNote(dest, { kind: "summary" });
+      setSaved((cur) => ({ ...cur, [dest]: data?.doc || null }));
+      await refresh?.();
+    } catch (e) {
+      setSaveErr({ err: e, dest });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmUpdate() {
+    const held = preview;
+    setSaving(true);
+    try {
+      await confirmNotePage(held.plan_id);
+      setSaved((cur) => ({ ...cur, [held.dest]: { title: held.page?.title } }));
+      setPreview(null);
+      await refresh?.();
+    } catch (e) {
+      setSaveErr({ err: e, dest: "notion" });
+      setPreview(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function cancelUpdate() {
+    if (preview) cancelNotePage(preview.plan_id).catch(() => {});
+    setPreview(null);
+  }
 
   async function regenerate() {
     setBusy(true);
@@ -147,15 +198,43 @@ function SummaryView({ summary, meeting, refresh }) {
           <p className="text-[12px] font-medium uppercase tracking-[0.14em] text-faint">Meeting summary</p>
           <h2 className="mt-2 text-[24px] font-semibold leading-tight tracking-[-0.03em] text-balance">{summary.title || meeting.title || "Meeting summary"}</h2>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={regenerate} disabled={busy}>
             <ArrowsClockwise size={14} aria-hidden /> Regenerate
+          </Button>
+          <Button size="sm" onClick={saveSummary} disabled={saving}>
+            <FileArrowUp size={14} aria-hidden /> {saving ? "Saving…" : isPageDest(dest) ? "Review update" : doc ? "Save again" : `Save to ${label}`}
           </Button>
           <Button size="sm" variant="primary" onClick={copy}>
             {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? "Copied" : "Copy summary"}
           </Button>
         </div>
       </div>
+      <NoteDestination className="mt-4" enabled={destination.enabled} labels={destination.labels} dest={dest} onChange={destination.setDest} />
+      {preview ? <UpdatePreview className="mt-4 max-w-[60ch]" preview={preview} busy={saving} onConfirm={confirmUpdate} onCancel={cancelUpdate} /> : null}
+      {doc ? (
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]" role="status">
+          <Pill tone="good">
+            <Check size={12} aria-hidden /> Saved
+          </Pill>
+          <span className="min-w-0 truncate text-muted">{doc.title}</span>
+          {doc.url ? (
+            <a className="inline-flex items-center gap-1 font-medium text-[#c6bfff] underline-offset-4 hover:underline" href={doc.url} target="_blank" rel="noreferrer">
+              Open in {dest === "notion" ? "Notion" : "Docs"} <ArrowSquareOut size={13} aria-hidden />
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+      {saveErr ? <SaveError err={saveErr.err} dest={saveErr.dest} go={go} /> : null}
+      {!doc && !saveErr ? (
+        <p className="mt-3 text-[12px] text-faint">
+          {isPageDest(dest)
+            ? "Adds a dated recap to the end of the page you picked. You review the change before anything is written."
+            : dest === "notion"
+            ? "Notion: one page per meeting under the parent page you picked. Saving again adds a dated section."
+            : "Google Docs: one doc per meeting in your Escort folder. Saving again adds a dated section."}
+        </p>
+      ) : null}
       {err ? <p className="mt-3 text-[12.5px] text-warn">{err}</p> : null}
 
       <Section title="Context">
@@ -205,6 +284,27 @@ function SummaryView({ summary, meeting, refresh }) {
         )}
       </Section>
     </Bezel>
+  );
+}
+
+function SaveError({ err, dest, go }) {
+  const hint = noteHint(err, dest);
+  const text = hint.quiet ? hint.text.replace("Noted in this meeting's recap. ", "") : hint.text;
+  const link = "font-medium text-[#c6bfff] underline-offset-4 hover:underline";
+  return (
+    <p className={`mt-3 text-[12.5px] leading-relaxed ${hint.quiet ? "text-muted" : "text-warn"}`} role="alert">
+      {text}{" "}
+      {hint.fix ? (
+        <button type="button" className={link} onClick={() => go?.("settings", "connections")}>
+          Open Connections
+        </button>
+      ) : null}
+      {hint.href ? (
+        <a className={link} href={hint.href} target="_blank" rel="noreferrer">
+          {hint.hrefLabel}
+        </a>
+      ) : null}
+    </p>
   );
 }
 

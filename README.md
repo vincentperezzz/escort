@@ -72,24 +72,66 @@ Open http://127.0.0.1:8750. MCP stays on http://127.0.0.1:8747/mcp. The WhatsApp
 ### Pre-meeting context (Context screen)
 
 - **Upload** PDF, DOCX, MD, or TXT (drag-and-drop or picker). Text is extracted locally (`pypdf`, `python-docx`), chunked by headings, and stored per meeting with `source · title` labels.
-- **Connectors** (pluggable `ContextSource`): Notion pages, Google Drive files, Google Calendar upcoming events. Tokens live in Windows Credential Manager via `keyring` (`notion_oauth_token`, `google_oauth_token`) — never in the repo.
+- **Connectors** (pluggable `ContextSource`): Notion pages, Google Docs / Sheets / Slides you paste a link to, Drive files you pick in Google's file chooser, Google Calendar upcoming events. Each person connects their own accounts (Connect Google opens their own browser sign-in; Notion takes their own integration token). Nothing in the code or the default installer names or contains any account. Tokens live in Windows Credential Manager via `keyring` (`notion_oauth_token`, `google_oauth_token`) — never in the repo.
 - **Auto-match**: On Live, **Upcoming meetings** lists mock or real calendar events. **Prep** scores uploaded + connector items against title, attendees, description, and linked-doc hints; confirm on Context to merge into live notes.
 - **Prep chat**: Taglish-friendly Muse Spark (`muse-spark-1.3`) over loaded context.
 - **WhatsApp**: send `prep` for a text summary of the next meeting’s matched context.
-- **Demo mode**: set `ESCORT_CONNECTORS=mock` (default when no tokens) for fictional BayaniPay calendar + Notion/Drive fixtures.
+- **Demo mode**: set `ESCORT_CONNECTORS=mock` (default when no tokens) for fictional BayaniPay calendar + Notion/Google fixtures (a pasted Docs, Sheets or Slides link, or a picked Drive file, resolves to a labeled demo item).
 
 OAuth setup (Boss):
 
 1. **Notion** — Create an integration at https://www.notion.so/my-integrations, copy the internal integration secret, share target pages/databases with the integration, paste the token in Setup (saved as `notion_oauth_token`).
-2. **Google** — In Google Cloud Console create an OAuth client (Desktop app), enable Calendar API + Drive API, complete OAuth with scopes `calendar.readonly` and `drive.readonly` (and Docs export as needed), paste the access token in Setup (`google_oauth_token`). Production builds should refresh tokens; the demo accepts a pasted bearer token via Setup or `POST /api/connectors/token`.
+2. **Google** — In Google Cloud Console create a project and an OAuth client (type Desktop app), then:
+   - **Enable these APIs:** Google Calendar, Google Docs, Google Sheets, Google Slides, Google Drive and Google Picker.
+   - **OAuth consent screen:** declare the scopes below (all "sensitive", none "restricted"; no Google security assessment). While the app is in Testing, add every user under **Test users**.
+   - **API key (only for Pick from Drive):** APIs & Services > Credentials > Create credentials > API key, then restrict it to the **Google Picker API** (and, optionally, HTTP referrers `http://127.0.0.1:*`). It is a browser key, not a secret, but Escort still hands it only to its own local window.
+   - In Escort press **Connect Google** and sign in with your own account (standard PKCE loopback flow; tokens refresh and live in the Windows keyring). The older "paste a bearer token" route (`POST /api/connectors/token`) still works for demos.
 
-   **Google app credentials (client ID + secret).** Nothing is hardcoded. After install, open Connect accounts > Google and paste them into the "Google app credentials" form (saved via `POST /api/setup`: ID in `config.json`, secret in the Windows keyring). Precedence: env (`ESCORT_GOOGLE_CLIENT_ID` / `ESCORT_GOOGLE_CLIENT_SECRET`) > saved Setup > bundled file. To pre-provision an installer, drop a git-ignored `google_client.json` in the repo root before building (`packaging/escort.iss` ships it next to `Escort.exe` only if it exists):
+   Scopes per capability. Only the first row is asked at sign-in; every other row is asked with incremental consent (`include_granted_scopes=true`, Google shows just the new box) the first time you use it:
+
+   | Capability | Scopes | Asked when |
+   | --- | --- | --- |
+   | Calendar + Docs links (sign-in) | `calendar.readonly`, `documents.readonly` | Connect Google |
+   | Sheets links | `spreadsheets.readonly` | first Sheets link (**Allow Sheets access**) |
+   | Slides links | `presentations.readonly` | first Slides link (**Allow Slides access**) |
+   | Pick from Drive | `drive.file` | first pick (**Allow Drive file picking**) |
+   | Save notes to Drive | `drive.file`, `documents` | turning the toggle on (**Allow note saving**) |
+
+   (All are under `https://www.googleapis.com/auth/`.) Escort never asks for Drive-wide read access and has no Drive search.
+
+   **Import from Google** (Context). Paste a `docs.google.com/document/d/…`, `/spreadsheets/d/…` or `/presentation/d/…` link; the type is detected from the link (a bare id gets a Docs / Sheets / Slides switch). Escort reads that one file and adds it labeled "Google Docs", "Google Sheets" or "Google Slides", split into the same cited sections the Notion importer produces:
+   - Docs: `documents.get`; headings, paragraphs, lists and tables.
+   - Sheets: `spreadsheets.get` (no grid data) for the tab names, then one `values.batchGet`; one markdown table per tab, capped at 200 rows x 30 columns per tab and 20 tabs, with a note when something was cut.
+   - Slides: `presentations.get`; one section per slide (`Slide N: <title>`) with text from shapes, tables and groups, plus speaker notes.
+
+   Forms, Drawings, published-to-the-web and `drive.google.com` links are refused with a pointer to Pick from Drive. A 404/403 says the file is not shared with the connected account, a disabled API links to the page that enables it, a missing scope returns `code: needs_<docs|sheets|slides|drive>_consent` with `capability` so the UI shows the right **Allow … access** button (and retries on its own once Google grants it), and an expired session asks you to connect again.
+
+   **Pick from Drive** (Context). Opens Google's own file chooser (Picker, loaded lazily from `apis.google.com`; an offline or blocked load shows a clear message). The page gets `GET /api/google/picker-config` → `{api_key, app_id, access_token, scope_ok, ready, reason}` (loopback callers and local origins only, `Cache-Control: no-store`, never the client secret; the token is refreshed first when it is about to expire). `app_id` is the Cloud project number, i.e. the client ID up to its first `-`. The picked file goes to `POST /api/context/import-drive-file {id, mimeType, name}`; the backend re-reads the file's metadata (type and size come from Google, not the browser), downloads PDF / DOCX / TXT / MD with `files.get?alt=media` or exports Google Docs (Markdown, falling back to text), Sheets (CSV → table, same caps) and Slides (text), refuses anything over 15 MB, runs the same extractor as uploads, and adds it labeled "Google Drive". With `drive.file` Escort can open only the files you pick.
+
+   **Google app credentials (client ID + secret + API key).** Nothing is hardcoded and the default installer contains none. Lookup order: env (`ESCORT_GOOGLE_CLIENT_ID` / `ESCORT_GOOGLE_CLIENT_SECRET` / `ESCORT_GOOGLE_API_KEY`) > saved Setup (Connect accounts > Google > "Google app credentials": ID in `config.json`, secret and API key in the Windows keyring) > a per-user file `%APPDATA%\Escort\google_client.json` (`~/.config/Escort/google_client.json` off Windows) > an optional file next to `Escort.exe`. The secret and API key always come from the same source as the client ID, so the key and the App ID belong to one project. Both files use this format (`api_key` optional):
 
    ```json
-   {"client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com", "client_secret": "YOUR_CLIENT_SECRET"}
+   {"client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com", "client_secret": "YOUR_CLIENT_SECRET", "api_key": "YOUR_PICKER_API_KEY"}
    ```
 
-   `/api/status` only reports whether credentials are configured and their source (`env`, `setup` or `bundled`); the secret is never returned or logged.
+   `packaging/escort.iss` does **not** bundle `google_client.json` unless you opt in: `ISCC /DBundleGoogleClient=1 packaging\escort.iss` with a git-ignored `google_client.json` in the repo root. `/api/status` reports only whether credentials are configured, their source (`env`, `setup`, `user_file` or `bundled`) and `has_client_secret` / `has_api_key`; the secret and key are never returned there or logged.
+
+### Saving meeting notes (optional, off by default)
+
+Escort only ever writes when you click: **Note it** on a commitment card (Live) or **Save to Google Docs / Save to Notion** on Recap > Summary. Nothing is written from heard speech. Prep chat understands "save summary to Docs" / "save this to my notes", but only saves after you reply yes. Re-saving a summary appends a new dated section; nothing is overwritten. When both destinations are on, you pick one (the last choice is remembered).
+
+**Google Docs.** Turn on **Save notes to Drive** in Connections > Google. (Needs the Drive API enabled; its `drive.file` grant also covers Pick from Drive.) Escort then asks Google (incremental consent, same PKCE/loopback flow, `include_granted_scopes=true`) for two extra scopes only:
+
+- `https://www.googleapis.com/auth/drive.file`: only files Escort creates or that you pick
+- `https://www.googleapis.com/auth/documents`
+
+It never requests the full `drive` scope. On the OAuth consent screen either add the two scopes above or let Escort request them. Escort makes one folder named `Escort` and one Google Doc per meeting titled `Escort · <meeting> · <YYYY-MM-DD>`, and refuses to edit any doc it did not create. Turning the toggle off just stops writing; to remove access entirely use https://myaccount.google.com/permissions. A token without the scopes shows **Allow note saving** instead of a raw 403; a disabled Docs API says how to enable it.
+
+**Notion.** In https://www.notion.so/profile/integrations (your own workspace) give your integration the **Insert content** and **Update content** capabilities, and share a parent page with it (page menu > Connections). Then turn on **Save notes to Notion** in Connections > Notion and pick that parent page from the search. Escort creates one child page per meeting under it. A `403 restricted_resource` from Notion is shown as "give the integration Insert/Update content and share the page".
+
+**Update an existing Notion page.** Notion can also keep your existing notes current, like Google Docs. In Connections > Notion use **Choose a page to keep updated** (from the same search; the page must be shared with the integration). Escort keeps a registry of the pages you picked (id, title, picked_at in `config.json`) next to the pages it created itself, and the write guard refuses every other page id before any request is made. Updates read the page's current blocks first (same block-to-text as the importer) so edits are targeted: append blocks, add a bulleted or checkbox item at the end of a heading's section (for a commitment, under **Commitments**; the heading is created if missing), or replace one block's text (`PATCH /v1/blocks/{id}`, only a block that is on the page). Updates are never automatic: **Note it** and **Save summary** gain an "Update: <page>" destination that first shows a preview ("Add to <page> under Commitments: - Pia: send SOW by Friday") with Confirm / Cancel, and prep chat ("update my CRM notes page with this") resolves the page by title among the picked pages, shows what it would add, and writes only after you reply yes. API: `POST /api/connectors/notion/targets {add: {id, title}}` or `{remove: id}`; `POST /api/notes/notion/update/preview {page_id, kind: "commitment" | "summary" | "edit", card_id?, block_id?, text?}` returns `{plan_id, summary, lines}` and writes nothing; `POST /api/notes/notion/update/confirm {plan_id}` performs it; `.../cancel {plan_id}` discards it.
+
+API: `POST /api/notes/drive` and `POST /api/notes/notion` take `{kind: "commitment" | "summary", card_id?}` and return `{ok, doc: {id, url, title}}`; `GET` on the same paths returns the current meeting's doc/page. Toggles: `POST /api/connectors/google/notes {enabled}`, `POST /api/connectors/google/consent {capability?: "notes" (default) | "docs" | "sheets" | "slides" | "drive_files"}`, `POST /api/connectors/notion/notes {enabled, parent_id?, parent_title?}`.
 
 ## Run the staged demo
 

@@ -68,7 +68,7 @@ export default function Settings({ status, refresh, section, go }) {
   return (
     <div className="mx-auto max-w-5xl">
       <h1 className="mb-10 text-[34px] font-semibold leading-none tracking-[-0.035em]">Settings</h1>
-      <div className="grid gap-8 md:grid-cols-[200px_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-8 md:grid-cols-[200px_minmax(0,1fr)]">
         <nav aria-label="Settings sections" className="md:sticky md:top-0 md:self-start">
           <ul className="flex gap-1 overflow-x-auto pb-1 scroll-thin md:flex-col md:overflow-visible">
             {SECTIONS.map(({ id, label, Icon }) => {

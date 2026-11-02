@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { UploadSimple, Trash, CaretDown, ArrowUpRight, Sparkle, MagnifyingGlass } from "@phosphor-icons/react";
 import { Bezel, Button, Panel, PageHeader, Pill } from "../components/ui.jsx";
 import ConnectAccounts from "../components/ConnectAccounts.jsx";
+import GoogleImport from "../components/GoogleImport.jsx";
 import { api, apiUpload, post, formatEventWhen } from "../lib/api.js";
 
 export default function ContextScreen({ status, refresh, go }) {
@@ -10,9 +11,7 @@ export default function ContextScreen({ status, refresh, go }) {
   const [paste, setPaste] = useState("");
   const [drag, setDrag] = useState(false);
   const [notionQ, setNotionQ] = useState("BayaniPay");
-  const [driveQ, setDriveQ] = useState("SOW");
   const [notionHits, setNotionHits] = useState([]);
-  const [driveHits, setDriveHits] = useState([]);
   const [proposals, setProposals] = useState(ctx.prep?.proposals || []);
   const [picked, setPicked] = useState(new Set(ctx.prep?.confirmed_ids || []));
   const [showConnect, setShowConnect] = useState(false);
@@ -74,7 +73,7 @@ export default function ContextScreen({ status, refresh, go }) {
 
   return (
     <div className="mx-auto max-w-6xl">
-      <PageHeader title="Context" lede="Everything Escort checks the call against. Upload docs, pull from Notion and Drive, then prep the next meeting.">
+      <PageHeader title="Context" lede="Everything Escort checks the call against. Upload docs, pull from Notion, bring in Google Docs, Sheets, Slides or Drive files, then prep the next meeting.">
         <Button variant="secondary" aria-expanded={showConnect} onClick={() => setShowConnect((v) => !v)}>
           Connect accounts
           <CaretDown size={14} aria-hidden className={`transition-transform duration-500 ease-glass ${showConnect ? "rotate-180" : ""}`} />
@@ -146,7 +145,7 @@ export default function ContextScreen({ status, refresh, go }) {
 
           <div className="grid gap-5 md:grid-cols-2">
             <SearchBox title="Notion" query={notionQ} onQuery={setNotionQ} onSearch={() => search("notion", notionQ, setNotionHits)} hits={notionHits} onImport={(id) => importHit("notion", id)} />
-            <SearchBox title="Drive" query={driveQ} onQuery={setDriveQ} onSearch={() => search("drive", driveQ, setDriveHits)} hits={driveHits} onImport={(id) => importHit("drive", id)} />
+            <GoogleImport refresh={refresh} onConnect={() => setShowConnect(true)} />
           </div>
 
           {prepEvent ? (
@@ -185,7 +184,7 @@ export default function ContextScreen({ status, refresh, go }) {
         <aside className="space-y-5">
           <Panel title="Library" hint={items.length ? `${items.length} item${items.length === 1 ? "" : "s"}` : undefined}>
             {items.length === 0 ? (
-              <p className="text-sm text-muted">Nothing yet. Upload a file or import from Notion or Drive.</p>
+              <p className="text-sm text-muted">Nothing yet. Upload a file, import from Notion, or paste a Google link.</p>
             ) : (
               <ul className="scroll-thin -mx-1 flex max-h-72 flex-col gap-1 overflow-auto px-1">
                 {items.map((item) => (

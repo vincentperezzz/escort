@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import Body, FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +12,17 @@ from escort.context.sources.base import ConnectorError
 from escort.desktop.runtime import DesktopRuntime
 
 PROVIDERS = ("google", "notion")
+LOCAL_ORIGIN = re.compile(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$")
+# "testclient" is the host Starlette's TestClient reports; a real remote peer is always an IP.
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _local_request(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    if host not in LOOPBACK_HOSTS:
+        return False
+    origin = request.headers.get("origin")
+    return origin is None or bool(LOCAL_ORIGIN.match(origin))
 
 
 def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> FastAPI:
@@ -18,7 +30,7 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
-        allow_origin_regex=r"^http://(127\.0\.0\.1|localhost)(:\d+)?$",
+        allow_origin_regex=LOCAL_ORIGIN.pattern,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -26,7 +38,7 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
 
     @app.exception_handler(ConnectorError)
     async def connector_error(_request: Request, err: ConnectorError) -> JSONResponse:
-        return JSONResponse(status_code=err.status_code, content={"error": str(err), "provider": err.provider})
+        return JSONResponse(status_code=err.status_code, content=err.payload())
 
     @app.get("/api/status")
     def status() -> dict:
@@ -144,6 +156,95 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     @app.post("/api/connectors/google/connect")
     def connect_google() -> dict:
         return runtime.connect_google()
+
+    @app.post("/api/connectors/google/notes")
+    def google_notes(body: dict) -> dict:
+        """Turn 'Save notes to Drive' on/off; on without the scopes returns an auth_url."""
+        return runtime.set_save_notes(bool(body.get("enabled")))
+
+    @app.post("/api/connectors/google/consent")
+    def google_consent(body: dict | None = Body(default=None)) -> dict:
+        """Incremental consent for one capability: {capability: notes (default) | docs | sheets | slides | drive_files}."""
+        capability = str((body or {}).get("capability") or "notes")
+        return runtime.google_notes_consent(capability)
+
+    @app.get("/api/google/picker-config", response_model=None)
+    def google_picker_config(request: Request) -> dict | JSONResponse:
+        """API key, App ID and a short-lived access token for Google's Drive file chooser.
+
+        Only for the local UI: refused for non-loopback callers and foreign browser origins.
+        Never includes the OAuth client secret.
+        """
+        if not _local_request(request):
+            return JSONResponse(status_code=403, content={"error": "The Drive file chooser config is only available to the local Escort window."})
+        return JSONResponse(content=runtime.google_picker_config(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/context/import-drive-file")
+    def context_import_drive_file(body: dict) -> dict:
+        return runtime.context_import_drive_file(
+            str(body.get("id") or body.get("file_id") or ""),
+            str(body.get("mimeType") or body.get("mime_type") or ""),
+            str(body.get("name") or ""),
+        )
+
+    @app.get("/api/notes/drive")
+    def notes_drive() -> dict:
+        return runtime.notes_drive_status()
+
+    @app.post("/api/notes/drive")
+    def save_notes_drive(body: dict) -> dict:
+        card_id = body.get("card_id")
+        return runtime.save_notes_drive(str(body.get("kind") or ""), str(card_id) if card_id else None)
+
+    @app.get("/api/notes/notion")
+    def notes_notion() -> dict:
+        return runtime.notes_notion_status()
+
+    @app.post("/api/notes/notion")
+    def save_notes_notion(body: dict) -> dict:
+        card_id = body.get("card_id")
+        return runtime.save_notes_notion(str(body.get("kind") or ""), str(card_id) if card_id else None)
+
+    @app.get("/api/notes/destinations")
+    def notes_destinations() -> dict:
+        return runtime.notes_status()
+
+    @app.post("/api/connectors/notion/notes")
+    def notion_notes(body: dict) -> dict:
+        """Turn 'Save notes to Notion' on/off; parent_id picks the page Escort writes under."""
+        parent_id = body.get("parent_id")
+        return runtime.set_notion_notes(
+            bool(body.get("enabled")),
+            str(parent_id) if parent_id else None,
+            str(body.get("parent_title") or "") or None,
+        )
+
+    @app.post("/api/connectors/notion/targets")
+    def notion_targets(body: dict) -> dict:
+        """'Choose a page to keep updated': {add: {id, title}} or {remove: id}."""
+        if body.get("remove"):
+            return runtime.remove_notion_target(str(body["remove"]))
+        added = body.get("add") or {}
+        return runtime.add_notion_target(str(added.get("id") or ""), str(added.get("title") or "") or None)
+
+    @app.post("/api/notes/notion/update/preview")
+    def notion_update_preview(body: dict) -> dict:
+        """What 'Update an existing page' would write, read from the page first. Writes nothing."""
+        return runtime.notion_update_preview(
+            str(body.get("page_id") or ""),
+            str(body.get("kind") or ""),
+            str(body["card_id"]) if body.get("card_id") else None,
+            str(body["block_id"]) if body.get("block_id") else None,
+            str(body["text"]) if body.get("text") else None,
+        )
+
+    @app.post("/api/notes/notion/update/confirm")
+    def notion_update_confirm(body: dict) -> dict:
+        return runtime.notion_update_confirm(str(body.get("plan_id") or ""))
+
+    @app.post("/api/notes/notion/update/cancel")
+    def notion_update_cancel(body: dict) -> dict:
+        return runtime.notion_update_cancel(str(body.get("plan_id") or ""))
 
     @app.post("/api/connectors/notion/connect")
     def connect_notion(body: dict) -> dict:

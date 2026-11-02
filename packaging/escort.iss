@@ -39,9 +39,13 @@ Type: filesandordirs; Name: "{app}\overlay"
 [Files]
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#OverlayDir}\*"; DestDir: "{app}\overlay"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Optional, git-ignored Google OAuth client (see README). Shipped only if present at build time.
+; The default installer carries no credentials, tokens or accounts. Each user adds their own Google
+; client in Escort (Connections > Google) or in %APPDATA%\Escort\google_client.json.
+; Opt in to bundling a git-ignored google_client.json with: ISCC /DBundleGoogleClient=1 escort.iss
+#ifdef BundleGoogleClient
 #if FileExists(AddBackslash(SourcePath) + "..\google_client.json")
 Source: "{#SourcePath}\..\google_client.json"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 #endif
 
 [Icons]

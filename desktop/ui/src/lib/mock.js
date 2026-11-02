@@ -65,7 +65,7 @@ const state = {
   context: {
     items: [
       { id: "i1", source_label: "Notion", title: "BayaniPay phase scope" },
-      { id: "i2", source_label: "Drive", title: "Statement of work v3" },
+      { id: "i2", source_label: "Google Docs", title: "Statement of work v3" },
       { id: "i3", source_label: "Notes", title: "notes.md" },
     ],
     connectors: [{ id: "notion", mode: "mock" }],
@@ -133,12 +133,189 @@ function mockSettingsReply(message) {
   return null;
 }
 
+// ?google=connected (notes off) | notes (on, allowed) | consent (on, Google has not allowed it) | revoke (off, still allowed)
+// | docs (connected before Docs reading existed: shows "Allow Docs access") | missing (no Google app credentials)
+// ?picker=ready (drive.file granted) | nokey (no API key) | offline (gapi script fails to load); default: needs consent
+// ?sheets=1 / ?slides=1: those read scopes were already granted
+const g = params.get("google");
+const picker = params.get("picker");
+const googleLive = ["connected", "notes", "consent", "revoke", "docs"].includes(g);
 const providers = [
-  { id: "google", label: "Google", connected: false, account: "", mode: "mock", configured: params.get("google") !== "missing", credentials_source: params.get("google") === "missing" ? null : "setup", has_client_secret: params.get("google") !== "missing", setup_hint: "" },
-  { id: "notion", label: "Notion", connected: true, account: "BayaniPay workspace", mode: "mock", configured: true, setup_hint: "" },
+  {
+    id: "google",
+    label: "Google",
+    connected: googleLive,
+    account: googleLive ? "you@example.com" : "",
+    mode: googleLive ? "live" : "mock",
+    configured: g !== "missing",
+    credentials_source: g === "missing" ? null : "setup",
+    has_client_secret: g !== "missing",
+    has_api_key: g !== "missing" && picker !== "nokey",
+    setup_hint: "",
+    capabilities: {
+      read: true,
+      read_docs: g !== "docs",
+      read_sheets: params.has("sheets"),
+      read_slides: params.has("slides"),
+      pick_drive_files: ["ready", "offline"].includes(picker) || g === "notes" || g === "revoke",
+      write_notes: g === "notes" || g === "revoke",
+    },
+    save_notes: g === "notes" || g === "consent",
+    needs_consent: g === "consent",
+    consent_pending: false,
+    needs_docs_consent: g === "docs",
+    docs_consent_pending: false,
+  },
+  notionRow(),
 ];
 
+// ?notion=off (not connected) | live (connected, notes off) | pick (on, no parent) | notes (on, parent set) | caps (blocked)
+function notionRow() {
+  const n = params.get("notion");
+  const live = ["live", "pick", "notes", "caps"].includes(n);
+  const on = ["pick", "notes", "caps"].includes(n);
+  const parent = ["notes", "caps"].includes(n) ? { id: "p-meetings", title: "Client meetings" } : null;
+  return {
+    id: "notion",
+    label: "Notion",
+    connected: n !== "off",
+    account: "BayaniPay workspace",
+    mode: live ? "live" : "mock",
+    configured: true,
+    setup_hint: "",
+    capabilities: { read: true, write_notes: Boolean(parent) && n !== "caps" },
+    save_notes: on,
+    parent,
+    targets: parent ? [{ id: "p-crm", title: "CRM notes", picked_at: new Date().toISOString() }] : [],
+    needs_parent: on && !parent,
+    needs_capabilities: n === "caps",
+  };
+}
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const MOCK_DOC = {
+  id: "doc_mock",
+  url: "https://docs.google.com/document/d/doc_mock/edit",
+  title: `Escort · BayaniPay scope review · ${new Date().toISOString().slice(0, 10)}`,
+};
+// ?saved=1 shows the Recap after a summary was already saved.
+const notesDrive = {
+  doc: params.get("saved") ? MOCK_DOC : null,
+  noted_cards: [],
+  summary_saved_at: params.get("saved") ? new Date().toISOString() : null,
+};
+
+function mockError(message, status, code, helpUrl = null) {
+  const err = new Error(message);
+  Object.assign(err, { status, code, helpUrl });
+  return err;
+}
+
+function notesStatus() {
+  const google = providers[0];
+  return {
+    enabled: google.save_notes,
+    connected: google.connected,
+    write_notes: google.capabilities.write_notes,
+    needs_consent: google.save_notes && !google.capabilities.write_notes,
+    meeting_id: "mtg_mock",
+    ...notesDrive,
+  };
+}
+
+const MOCK_PAGE = { id: "page_mock", url: "https://www.notion.so/page_mock", title: MOCK_DOC.title };
+const notionDrive = { doc: null, noted_cards: [], summary_saved_at: null };
+let lastDest = params.get("dest") || null;
+
+function notionStatus() {
+  const n = providers[1];
+  return { enabled: n.save_notes, connected: n.connected, write_notes: n.capabilities.write_notes, parent: n.parent, targets: n.targets, meeting_id: "mtg_mock", ...notionDrive };
+}
+
+function combinedNotes() {
+  const enabled = [providers[0].save_notes && "drive", providers[1].save_notes && "notion"].filter(Boolean);
+  return { enabled, last: enabled.includes(lastDest) ? lastDest : enabled[0] || "drive", drive: notesStatus(), notion: notionStatus() };
+}
+
+function saveNotion(body) {
+  const n = providers[1];
+  if (!n.save_notes) throw mockError("Turn on Save notes to Notion to keep this in Notion.", 400, "notes_off");
+  if (!n.parent) throw mockError("Pick the Notion page Escort should save meeting pages under.", 400, "no_parent");
+  if (n.needs_capabilities) {
+    throw mockError("Notion blocked this (restricted_resource). Give your integration the 'Insert content' and 'Update content' capabilities.", 403, "needs_capabilities", "https://www.notion.so/profile/integrations");
+  }
+  notionDrive.doc = MOCK_PAGE;
+  if (body.kind === "commitment") notionDrive.noted_cards = [...notionDrive.noted_cards, body.card_id];
+  else notionDrive.summary_saved_at = new Date().toISOString();
+  lastDest = "notion";
+  return { ok: true, destination: "notion", kind: body.kind, doc: MOCK_PAGE, ...notionDrive };
+}
+
+function saveNotes(body) {
+  const google = providers[0];
+  if (!google.save_notes) throw mockError("Turn on Save notes to Drive to keep this in Google Docs.", 400, "notes_off");
+  if (!google.capabilities.write_notes) throw mockError("Escort needs your permission to save notes to Google Docs.", 403, "needs_consent");
+  notesDrive.doc = MOCK_DOC;
+  lastDest = "drive";
+  if (body.kind === "commitment") notesDrive.noted_cards = [...notesDrive.noted_cards, body.card_id];
+  else notesDrive.summary_saved_at = new Date().toISOString();
+  return { ok: true, kind: body.kind, doc: MOCK_DOC, ...notesDrive };
+}
+
+const KIND_META = {
+  docs: { label: "Google Docs", noun: "document", api: "docs.googleapis.com", consent: ["needs_docs_consent", "Allow Docs access", "read Google Docs"] },
+  sheets: { label: "Google Sheets", noun: "spreadsheet", api: "sheets.googleapis.com", consent: ["needs_sheets_consent", "Allow Sheets access", "read Google Sheets"] },
+  slides: { label: "Google Slides", noun: "presentation", api: "slides.googleapis.com", consent: ["needs_slides_consent", "Allow Slides access", "read Google Slides"] },
+};
+
+function consentError(capability) {
+  const [code, button, verb] = capability === "drive_files"
+    ? ["needs_drive_consent", "Allow Drive file picking", "open the Drive files you pick"]
+    : KIND_META[capability].consent;
+  const err = mockError(`Escort needs your permission to ${verb}. Click ${button}, then try again.`, 403, code);
+  err.capability = capability;
+  return err;
+}
+
+// Mirrors escort/context/sources/google_source.py parse_google_link: Docs, Sheets and Slides links.
+function importGoogleLink(text, source) {
+  const raw = text.trim();
+  const bad = (message, code) => mockError(message, 400, code);
+  if (!raw) throw bad("Paste a Google Docs, Sheets or Slides link first.", "bad_link");
+  if (/drive\.google\.com|docs\.google\.com\/(forms|drawings)\/|\/d\/e\//.test(raw)) {
+    throw bad("Escort reads Google Docs, Sheets and Slides links. For other Drive files (PDF, Word, text), use Pick from Drive.", "unsupported_link");
+  }
+  const link = raw.match(/docs\.google\.com\/(document|spreadsheets|presentation)\/(?:u\/\d+\/)?d\/([\w-]+)/);
+  if (!link && !/^[\w-]{10,}$/.test(raw)) throw bad("That does not look like a Google Docs, Sheets or Slides link. Paste a docs.google.com/... link, or an id with its type selected.", "bad_link");
+  const kind = link ? { document: "docs", spreadsheets: "sheets", presentation: "slides" }[link[1]] : (source || "google_docs").replace("google_", "");
+  const meta = KIND_META[kind];
+  const google = providers[0];
+  if (google.connected && !google.capabilities[`read_${kind}`]) throw consentError(kind);
+  if (/fail404/.test(raw)) throw mockError(`Google could not find that ${meta.noun}, or it is not shared with the Google account Escort is connected to.`, 404, "not_found");
+  if (/fail403/.test(raw)) throw mockError(`That ${meta.noun} is not shared with the Google account Escort is connected to. Ask for access, or connect the account that has it.`, 403, "not_shared");
+  if (/failapi/.test(raw)) throw mockError(`Enable the ${meta.label} API in your Google Cloud project, then try again.`, 409, "api_disabled", `https://console.cloud.google.com/apis/library/${meta.api}`);
+  state.context.items = [...state.context.items, { id: `i${state.context.items.length + 1}`, source_label: meta.label, title: `Pasted ${meta.label.replace("Google ", "")} (demo)`, mock: true }];
+  return status();
+}
+
+function pickerConfig() {
+  const google = providers[0];
+  const base = { mode: google.mode, app_id: "123456789012", api_key: null, access_token: null, scope_ok: google.capabilities.pick_drive_files, ready: false, reason: null };
+  if (!google.connected) return { ...base, reason: "not_connected" };
+  if (google.mode === "mock") return { ...base, reason: "demo" };
+  if (!google.has_api_key) return { ...base, reason: "no_api_key" };
+  if (!google.capabilities.pick_drive_files) return { ...base, reason: "needs_consent" };
+  return { ...base, api_key: "mock-key", access_token: "mock-token", ready: true, mock_offline: picker === "offline" };
+}
+
+function importDriveFile(body) {
+  const google = providers[0];
+  if (!google.capabilities.pick_drive_files) throw consentError("drive_files");
+  if (/\.(png|jpe?g|zip)$/i.test(body.name || "")) throw mockError("Escort reads PDF, Word (.docx), text and Markdown files, and Google Docs, Sheets and Slides. That file is a different type.", 400, "unsupported_file");
+  state.context.items = [...state.context.items, { id: `i${state.context.items.length + 1}`, source_label: "Google Drive", title: body.name || "Picked file", mock: true }];
+  return status();
+}
 
 function status() {
   return {
@@ -164,6 +341,8 @@ function status() {
     ],
     meeting: state.meeting,
     context: state.context,
+    notes_drive: notesStatus(),
+    notes: combinedNotes(),
     mcp: "http://127.0.0.1:8747/mcp",
     whatsapp: "http://127.0.0.1:8748/webhook",
   };
@@ -230,10 +409,79 @@ export async function handle(path, options = {}) {
       g.credentials_source = "setup";
     }
     if (body.google_client_secret) g.has_client_secret = true;
+    if (body.google_api_key) g.has_api_key = true;
     return status();
   }
   if (path === "/api/connectors/status") return { providers };
-  if (path === "/api/context/search") return { hits: [{ id: "h1", title: "BayaniPay phase scope", snippet: "Phase 2 ships after KYC go-live." }] };
+  if (path === "/api/connectors/google/notes") {
+    const google = providers[0];
+    google.save_notes = Boolean(body.enabled);
+    google.needs_consent = google.save_notes && !google.capabilities.write_notes;
+    if (google.needs_consent) {
+      // Pretend the user allows it in the browser a few seconds later.
+      google.consent_pending = true;
+      setTimeout(() => Object.assign(google, { consent_pending: false, needs_consent: false, capabilities: { read: true, write_notes: true } }), 4000);
+      return { providers, auth_url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" };
+    }
+    return { providers, ...(google.save_notes ? {} : { revoke_url: "https://myaccount.google.com/permissions" }) };
+  }
+  if (path === "/api/connectors/google/consent") {
+    const google = providers[0];
+    const capability = body.capability || "notes";
+    const grant = { notes: { write_notes: true, pick_drive_files: true }, sheets: { read_sheets: true }, slides: { read_slides: true }, drive_files: { pick_drive_files: true }, docs: { read_docs: true } }[capability] || {};
+    if (capability === "notes") google.consent_pending = true;
+    setTimeout(() => {
+      Object.assign(google, { capabilities: { ...google.capabilities, ...grant } });
+      if (capability === "notes") Object.assign(google, { consent_pending: false, needs_consent: false });
+    }, 4000);
+    return { auth_url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" };
+  }
+  if (path === "/api/google/picker-config") return pickerConfig();
+  if (path === "/api/context/import-drive-file") return importDriveFile(body);
+  if (path === "/api/notes/drive") return method === "POST" ? saveNotes(body) : notesStatus();
+  if (path === "/api/notes/notion") return method === "POST" ? saveNotion(body) : notionStatus();
+  if (path === "/api/connectors/notion/notes") {
+    const n = providers[1];
+    n.save_notes = Boolean(body.enabled);
+    if (body.parent_id) Object.assign(n, { parent: { id: body.parent_id, title: body.parent_title }, needs_capabilities: false });
+    n.needs_parent = n.save_notes && !n.parent;
+    n.capabilities = { read: true, write_notes: Boolean(n.parent) && !n.needs_capabilities };
+    return { providers };
+  }
+  if (path === "/api/context/import" && /^google_(docs|sheets|slides)$/.test(body.source)) return importGoogleLink(String(body.external_id || ""), body.source);
+  if (path === "/api/connectors/google/connect") {
+    const google = providers[0];
+    setTimeout(() => Object.assign(google, { needs_docs_consent: false, capabilities: { ...google.capabilities, read_docs: true } }), 4000);
+    return { auth_url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" };
+  }
+  if (path === "/api/connectors/notion/targets") {
+    const n = providers[1];
+    if (body.remove) n.targets = n.targets.filter((t) => t.id !== body.remove);
+    else n.targets = [...n.targets.filter((t) => t.id !== body.add.id), { ...body.add, picked_at: new Date().toISOString() }];
+    return { providers };
+  }
+  if (path === "/api/notes/notion/update/preview") {
+    const target = providers[1].targets.find((t) => t.id === body.page_id);
+    if (!target) throw mockError("Escort only writes to Notion pages it created or that you picked under Choose a page to keep updated.", 403, "unknown_doc");
+    return {
+      plan_id: "upd_mock",
+      kind: body.kind,
+      card_id: body.card_id || null,
+      page: { id: target.id, title: target.title },
+      summary: body.kind === "summary" ? `Add a dated recap to the end of ${target.title}:` : `Add to ${target.title} under Commitments:`,
+      lines: body.kind === "summary" ? ["Recap · today", "Summary", "- Phase 2 waits for KYC.", "Commitments", "- Pia: send SOW by Friday"] : ["- Pia: send SOW by Friday (Friday)"],
+    };
+  }
+  if (path === "/api/notes/notion/update/confirm") return { ok: true, destination: "notion", updated: true, noted_cards: [], page: { id: "p-crm", title: "CRM notes" } };
+  if (path === "/api/notes/notion/update/cancel") return { ok: true };
+  if (path === "/api/context/search") {
+    return {
+      hits: [
+        { id: "h1", title: "BayaniPay phase scope", snippet: "Phase 2 ships after KYC go-live." },
+        { id: "h2", title: "Client meetings", snippet: "Notion page" },
+      ],
+    };
+  }
   if (path === "/api/context/match") return { proposals: [] };
   return status();
 }

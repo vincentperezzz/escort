@@ -14,6 +14,11 @@ import httpx
 from escort.capture import monitors as monitor_mod
 from escort.context.library import ContextLibrary
 from escort.context.mock_data import mock_import_item
+from escort.context.sources.base import ConnectorError, ConnectorSetupError
+from escort.context.sources.google_auth import PROVIDER as GOOGLE, REVOKE_HELP_URL
+from escort.context.sources.google_docs import DictNotesState, GoogleNotes, public_doc
+from escort.context.sources.notion_source import PROVIDER as NOTION
+from escort.context.sources.notion_write import NotionNotes, NotionNotesState, UpdatePlans, public_page, public_target
 from escort.context.sources.registry import Connectors
 from escort.context.prep_chat import prep_chat
 from escort.context.settings_intent import describe_settings, handle_settings_message
@@ -23,7 +28,7 @@ from escort.desktop.overlay import DEFAULT_OPACITY, clamp_opacity
 from escort.desktop.secret_store import MemorySecretStore, SecretStore, open_secret_store
 from escort.replay import build_pipeline, load_scenario, run_replay
 from escort.settings import Settings, load_settings
-from escort.store import MeetingStore, utc_now
+from escort.store import MeetingStore, new_id, utc_now
 from escort.summary import empty_summary, generate_summary, rules_summary
 
 if TYPE_CHECKING:
@@ -44,6 +49,8 @@ class OverlayProcess(Protocol):
     def stop(self) -> None: ...
 
 
+NOTE_DESTINATIONS = ("drive", "notion")
+NOTION_PLAN_TTL_S = 600.0
 IDLE_SCREEN = {"monitoring": False, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0}
 MONITOR_CACHE_S = 3.0
 
@@ -57,6 +64,7 @@ KEY_NAMES = (
     "notion_oauth_token",
     "google_oauth_token",
     "google_client_secret",
+    "google_api_key",
 )
 
 
@@ -110,6 +118,13 @@ class DesktopRuntime:
             # Keychain survives restarts; Muse clients read the key from the environment.
             os.environ["MODEL_API_KEY"] = key
         self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
+        self.connectors.save_notes_getter = lambda: self.save_notes_enabled
+        self.notes = GoogleNotes(self.connectors.google, DictNotesState(self.prefs, on_change=self._write_prefs))
+        self.notion_notes = NotionNotes(self.connectors.notion, NotionNotesState(self.prefs, on_change=self._write_prefs))
+        self.connectors.notion_notes_getter = self._notion_notes_view
+        self._notion_plans: dict[str, dict[str, Any]] = {}  # confirmation previews waiting for Confirm / Cancel
+        # One Google Doc per meeting; a new id when a new listening session starts or the meeting is deleted.
+        self.meeting_id = new_id("mtg")
         self.context = ContextLibrary(store.media_dir.parent, self.secrets.get, connectors=self.connectors)
 
     def _context_root(self) -> Path:
@@ -235,6 +250,8 @@ class DesktopRuntime:
             "meeting": snapshot,
             "context": self.context.public_view(),
             "connectors": self.connectors.status(),
+            "notes_drive": self.notes_drive_status(),
+            "notes": self.notes_status(),
             "overlay": self.overlay_status(),
             "mcp":"http://127.0.0.1:8747/mcp",
             "whatsapp": "http://127.0.0.1:8748/webhook",
@@ -245,10 +262,10 @@ class DesktopRuntime:
             if body.get("meta_api_key"):
                 self.secrets.set("meta_api_key", str(body["meta_api_key"]))
                 os.environ["MODEL_API_KEY"] = str(body["meta_api_key"])
-            for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token", "google_client_secret"):
+            for name in ("whatsapp_access_token", "whatsapp_app_secret", "whatsapp_verify_token", "notion_oauth_token", "google_oauth_token", "google_client_secret", "google_api_key"):
                 if body.get(name):
                     value = str(body[name])
-                    self.secrets.set(name, value.strip() if name == "google_client_secret" else value)
+                    self.secrets.set(name, value.strip() if name in ("google_client_secret", "google_api_key") else value)
             for key in ("mic_id", "loopback_id", "whatsapp_phone_number_id", "whatsapp_allowed_numbers", "whatsapp_graph_version", "google_client_id"):
                 if key in body:
                     self.prefs[key] = body[key].strip() if key == "google_client_id" and isinstance(body[key], str) else body[key]
@@ -318,11 +335,12 @@ class DesktopRuntime:
     def load_demo(self) -> dict[str, Any]:
         scenario = load_scenario()
         settings = load_settings()
+        self.meeting_id = new_id("mtg")
         self.context.clear()
         self.context.add_paste(scenario.prd_text, title="BayaniPay scope (demo)")
         # The demo is a fixed scenario: always use the bundled sample docs, never live accounts.
         self.context.add_item(mock_import_item("notion", "notion_phase_scope"))
-        self.context.add_item(mock_import_item("drive", "drive_sow"))
+        self.context.add_item(mock_import_item("google_docs", "docs_sow"))
         self.context.confirm_prep("evt_bayani_scope", [item.id for item in self.context.items()[:2]])
         self.context.apply_to_store(self.store)
         pipeline = build_pipeline(
@@ -349,6 +367,313 @@ class DesktopRuntime:
     def disconnect_connector(self, provider: str) -> dict[str, Any]:
         return self.connectors.disconnect(provider)
 
+    # --- Save notes to Drive (user-clicked writes only) ------------------------
+
+    @property
+    def save_notes_enabled(self) -> bool:
+        return bool(self.prefs.get("google_save_notes", False))
+
+    def set_save_notes(self, enabled: bool) -> dict[str, Any]:
+        """Turn note saving on/off. On without the scopes starts the incremental consent flow."""
+        with self._lock:
+            if self.save_notes_enabled != enabled:
+                self.prefs["google_save_notes"] = enabled
+                self._write_prefs()
+        out: dict[str, Any] = {}
+        google = self.connectors.google
+        if enabled and google.connected() and not google.can_write_notes() and google.pending_scopes() is None:
+            out = self.connectors.connect_google(notes=True)
+        if not enabled:
+            out["revoke_url"] = REVOKE_HELP_URL
+        self._notify()
+        return {**self.connectors.status(), **out}
+
+    def google_notes_consent(self, capability: str = "notes") -> dict[str, Any]:
+        """'Allow note saving' (default) or 'Allow Sheets/Slides access', 'Allow Drive file picking':
+        incremental consent for that capability's scopes only."""
+        if not self.connectors.google.connected():
+            hint = "Turn on Save notes to Drive." if capability == "notes" else "Then try again."
+            raise ConnectorSetupError(GOOGLE, f"Connect Google first. {hint}", code="not_connected")
+        return self.connectors.connect_google(capability=capability)
+
+    def google_picker_config(self) -> dict[str, Any]:
+        return self.connectors.picker_config()
+
+    def context_import_drive_file(self, file_id: str, mime_type: str, name: str) -> dict[str, Any]:
+        with self._lock:
+            self.context.import_drive_file(file_id, mime_type, name)
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def meeting_title(self) -> str:
+        title = (self.store.title or "").strip()
+        if title and title != "Live meeting":
+            return title
+        summary_title = str(self.summary.get("title") or "").strip()
+        return summary_title or title or "Meeting"
+
+    @property
+    def notion_save_notes_enabled(self) -> bool:
+        return bool(self.prefs.get("notion_save_notes", False))
+
+    def set_notion_notes(self, enabled: bool, parent_id: str | None = None, parent_title: str | None = None) -> dict[str, Any]:
+        """Turn 'Save notes to Notion' on/off and (optionally) pick the parent page. No network."""
+        with self._lock:
+            self.prefs["notion_save_notes"] = enabled
+            if parent_id:
+                self.prefs["notion_needs_capabilities"] = False
+                self.notion_notes.state.set_parent(parent_id, parent_title)
+            self._write_prefs()
+        self._notify()
+        return self.connectors.status()
+
+    def _notion_notes_view(self) -> dict[str, Any]:
+        return {
+            "save_notes": self.notion_save_notes_enabled,
+            "parent": self.notion_notes.state.parent(),
+            "targets": self.notion_targets(),
+            "needs_capabilities": bool(self.prefs.get("notion_needs_capabilities")),
+        }
+
+    # --- Update an existing Notion page (user-picked targets; preview, then Confirm) ----------
+
+    def notion_targets(self) -> list[dict[str, Any]]:
+        entries = sorted(self.notion_notes.state.targets().values(), key=lambda item: str(item.get("picked_at") or ""))
+        return [public_target(entry) for entry in entries]
+
+    def add_notion_target(self, page_id: str, title: str | None = None) -> dict[str, Any]:
+        """'Choose a page to keep updated': remember a page the user picked from the Notion search."""
+        if not page_id.strip():
+            raise ConnectorSetupError(NOTION, "Pick a page first.", code="bad_request")
+        with self._lock:
+            self.notion_notes.state.add_target(page_id.strip(), title)
+        self._notify()
+        return self.connectors.status()
+
+    def remove_notion_target(self, page_id: str) -> dict[str, Any]:
+        with self._lock:
+            self.notion_notes.state.remove_target(page_id)
+        self._notify()
+        return self.connectors.status()
+
+    def notion_find_targets(self, text: str) -> list[dict[str, Any]]:
+        """Picked pages whose title the text mentions (whole title, or every significant word of it)."""
+        said = " ".join("".join(ch if ch.isalnum() else " " for ch in text.lower()).split())
+        found = []
+        for target in self.notion_targets():
+            words = " ".join("".join(ch if ch.isalnum() else " " for ch in str(target["title"]).lower()).split())
+            significant = [word for word in words.split() if len(word) > 2]
+            if words and (f" {words} " in f" {said} " or (significant and all(f" {word} " in f" {said} " for word in significant))):
+                found.append(target)
+        return found
+
+    def _notion_call(self, work: Callable[[], Any]) -> Any:
+        try:
+            result = work()
+        except ConnectorError as err:
+            if err.code == "needs_capabilities":
+                self.prefs["notion_needs_capabilities"] = True
+                self._write_prefs()
+            raise
+        if self.prefs.get("notion_needs_capabilities"):
+            self.prefs["notion_needs_capabilities"] = False
+            self._write_prefs()
+        return result
+
+    def notion_update_preview(
+        self, page_id: str, kind: str, card_id: str | None = None, block_id: str | None = None, text: str | None = None
+    ) -> dict[str, Any]:
+        """Read the page and describe exactly what would change. Nothing is written until Confirm."""
+        if kind not in ("commitment", "summary", "edit"):
+            raise ConnectorSetupError(NOTION, "kind must be 'commitment', 'summary' or 'edit'", code="bad_request")
+        plans = UpdatePlans(self.notion_notes)
+        if kind == "commitment":
+            card = next((item for item in self.store.cards if item.id == card_id), None)
+            if card is None or card.type != "COMMITMENT":
+                raise ConnectorSetupError(NOTION, "That commitment card is not in this meeting.", code="unknown_card")
+            build = lambda: plans.commitment(page_id, card.who or "Someone", card.what or card.title, card.when)  # noqa: E731
+        elif kind == "summary":
+            summary = self.summary_status()
+            if summary.get("status") != "ready":
+                raise ConnectorSetupError(NOTION, "There is no finished summary to save yet.", code="no_summary")
+            build = lambda: plans.summary(page_id, summary)  # noqa: E731
+        else:
+            if not block_id or not (text or "").strip():
+                raise ConnectorSetupError(NOTION, "Say which block and what it should say.", code="bad_request")
+            build = lambda: plans.edit(page_id, block_id, str(text).strip())  # noqa: E731
+        plan = self._notion_call(build)
+        now = time.monotonic()
+        with self._lock:
+            self._notion_plans = {key: value for key, value in self._notion_plans.items() if now - value["at"] < NOTION_PLAN_TTL_S}
+            plan_id = new_id("upd")
+            self._notion_plans[plan_id] = {"plan": plan, "at": now, "kind": kind, "card_id": card_id}
+        return {"plan_id": plan_id, "kind": kind, "card_id": card_id, "page": plan["page"], "summary": plan["summary"], "lines": plan["lines"]}
+
+    def notion_update_confirm(self, plan_id: str) -> dict[str, Any]:
+        with self._lock:
+            held = self._notion_plans.pop(plan_id, None)
+        if held is None or time.monotonic() - held["at"] >= NOTION_PLAN_TTL_S:
+            raise ConnectorSetupError(NOTION, "That update is no longer waiting. Start it again.", code="plan_expired")
+        page = self._notion_call(lambda: UpdatePlans(self.notion_notes).apply(held["plan"]))
+        with self._lock:
+            self.prefs["notes_destination"] = "notion"
+            self._write_prefs()
+        log.info("Updated an existing Notion page after confirmation")
+        self._notify()
+        return {
+            "ok": True,
+            "destination": "notion",
+            "kind": held["kind"],
+            "updated": True,
+            "page": page,
+            "noted_cards": [held["card_id"]] if held.get("card_id") else [],
+        }
+
+    def notion_update_cancel(self, plan_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._notion_plans.pop(plan_id, None)
+        return {"ok": True}
+
+    def notes_drive_status(self) -> dict[str, Any]:
+        """The current meeting's Google Doc (if any) and whether saving is possible. No network."""
+        google = self.connectors.google
+        entry = self.notes.doc_for(self.meeting_id)
+        return {
+            "enabled": self.save_notes_enabled,
+            "connected": google.connected(),
+            "write_notes": google.can_write_notes(),
+            "needs_consent": self.save_notes_enabled and google.connected() and not google.can_write_notes(),
+            "meeting_id": self.meeting_id,
+            "doc": public_doc(entry),
+            "noted_cards": list((entry or {}).get("noted_cards") or []),
+            "summary_saved_at": (entry or {}).get("summary_saved_at"),
+        }
+
+    def notes_notion_status(self) -> dict[str, Any]:
+        """The current meeting's Notion page (if any) and whether saving is possible. No network."""
+        notion = self.connectors.notion
+        view = self._notion_notes_view()
+        entry = self.notion_notes.page_for(self.meeting_id)
+        return {
+            "enabled": view["save_notes"],
+            "connected": notion.connected(),
+            "write_notes": notion.connected() and bool(view["parent"]) and not view["needs_capabilities"],
+            "needs_parent": view["save_notes"] and notion.connected() and not view["parent"],
+            "needs_capabilities": view["needs_capabilities"],
+            "parent": view["parent"],
+            "targets": view["targets"],
+            "meeting_id": self.meeting_id,
+            "doc": public_page(entry),
+            "noted_cards": list((entry or {}).get("noted_cards") or []),
+            "summary_saved_at": (entry or {}).get("summary_saved_at"),
+        }
+
+    def notes_status(self) -> dict[str, Any]:
+        """Both destinations plus the remembered choice, for the UI's destination picker."""
+        enabled = [dest for dest in NOTE_DESTINATIONS if self._dest_enabled(dest)]
+        return {"enabled": enabled, "last": self.preferred_destination(), "drive": self.notes_drive_status(), "notion": self.notes_notion_status()}
+
+    def _dest_enabled(self, dest: str) -> bool:
+        return self.save_notes_enabled if dest == "drive" else self.notion_save_notes_enabled
+
+    def preferred_destination(self) -> str:
+        last = self.prefs.get("notes_destination")
+        if last in NOTE_DESTINATIONS and self._dest_enabled(last):
+            return last
+        return next((dest for dest in NOTE_DESTINATIONS if self._dest_enabled(dest)), "drive")
+
+    def save_notes_drive(self, kind: str, card_id: str | None = None) -> dict[str, Any]:
+        """POST /api/notes/drive: append a commitment or the structured summary to this meeting's Google Doc."""
+        return self.save_notes("drive", kind, card_id)
+
+    def save_notes_notion(self, kind: str, card_id: str | None = None) -> dict[str, Any]:
+        """POST /api/notes/notion: the same, to this meeting's Notion page."""
+        return self.save_notes("notion", kind, card_id)
+
+    def save_notes(self, dest: str, kind: str, card_id: str | None = None) -> dict[str, Any]:
+        provider = GOOGLE if dest == "drive" else NOTION
+        if kind not in ("commitment", "summary"):
+            raise ConnectorSetupError(provider, "kind must be 'commitment' or 'summary'", code="bad_request")
+        if not self._dest_enabled(dest):
+            hint = (
+                "Turn on Save notes to Drive to keep this in Google Docs."
+                if dest == "drive"
+                else "Turn on Save notes to Notion to keep this in Notion."
+            )
+            raise ConnectorSetupError(provider, hint, code="notes_off")
+        writer = self.notes if dest == "drive" else self.notion_notes
+        meeting_id, title = self.meeting_id, self.meeting_title()
+        try:
+            if kind == "commitment":
+                card = next((item for item in self.store.cards if item.id == card_id), None)
+                if card is None or card.type != "COMMITMENT":
+                    raise ConnectorSetupError(provider, "That commitment card is not in this meeting.", code="unknown_card")
+                entry = writer.note_commitment(meeting_id, title, card.who or "Someone", card.what or card.title, card.when)
+                noted = sorted({*(entry.get("noted_cards") or []), card.id})
+                entry = self._update_note_entry(dest, meeting_id, noted_cards=noted)
+            else:
+                summary = self.summary_status()
+                if summary.get("status") != "ready":
+                    raise ConnectorSetupError(provider, "There is no finished summary to save yet.", code="no_summary")
+                writer.save_summary(meeting_id, title, summary)
+                entry = self._update_note_entry(dest, meeting_id, summary_saved_at=utc_now())
+        except ConnectorError as err:
+            if dest == "notion" and err.code == "needs_capabilities":
+                self.prefs["notion_needs_capabilities"] = True
+                self._write_prefs()
+            raise
+        with self._lock:
+            self.prefs["notes_destination"] = dest  # remembered for the next Note it / Save summary
+            if dest == "notion":
+                self.prefs["notion_needs_capabilities"] = False
+            self._write_prefs()
+        log.info("Saved a %s to the meeting's %s", kind, "Google Doc" if dest == "drive" else "Notion page")
+        self._notify()
+        public = public_doc if dest == "drive" else public_page
+        return {
+            "ok": True,
+            "destination": dest,
+            "kind": kind,
+            "doc": public(entry),
+            "noted_cards": list(entry.get("noted_cards") or []),
+            "summary_saved_at": entry.get("summary_saved_at"),
+        }
+
+    def save_notes_preferred(self, kind: str) -> dict[str, Any]:
+        """Chat: save to the remembered destination (after the user confirmed)."""
+        return self.save_notes(self.preferred_destination(), kind)
+
+    def notes_save_status(self) -> dict[str, Any]:
+        """Chat: what saving to the preferred destination would need."""
+        dest = self.preferred_destination()
+        status = self.notes_drive_status() if dest == "drive" else self.notes_notion_status()
+        blocked = None
+        if dest == "drive" and status["needs_consent"]:
+            blocked = "Google hasn't allowed note saving yet. Open Connections > Google and click Allow note saving."
+        if dest == "notion" and (status["needs_parent"] or status["needs_capabilities"]):
+            blocked = "Notion isn't ready to save notes yet. Open Connections > Notion to pick a parent page and check the integration's capabilities."
+        return {
+            **status,
+            "destination": dest,
+            "label": "Google Docs" if dest == "drive" else "Notion",
+            "enabled": any(self._dest_enabled(item) for item in NOTE_DESTINATIONS),
+            "blocked": blocked,
+        }
+
+    def _update_note_entry(self, dest: str, meeting_id: str, **fields: Any) -> dict[str, Any]:
+        with self._lock:
+            if dest == "drive":
+                docs = self.notes.state.docs()
+                entry = {**docs.get(meeting_id, {}), **fields}
+                docs[meeting_id] = entry
+                self.notes.state.set_docs(docs)
+            else:
+                pages = self.notion_notes.state.pages()
+                entry = {**pages.get(meeting_id, {}), **fields}
+                pages[meeting_id] = entry
+                self.notion_notes.state.set_pages(pages)
+        return entry
+
     def set_listening(self, on: bool) -> dict[str, Any]:
         with self._lock:
             was = self.listening
@@ -358,6 +683,7 @@ class DesktopRuntime:
             if not on and self.store.mode == "live":
                 self.store.mode = "idle"
             if on and not was:
+                self.meeting_id = new_id("mtg")
                 self.listening_started_at = utc_now()
                 self._summary_gen += 1
                 self.summary = empty_summary()
@@ -417,6 +743,7 @@ class DesktopRuntime:
             self.summary = empty_summary()
             self._stop_capture(timeout=2.0)
             self.live = None
+            self.meeting_id = new_id("mtg")
             self.store.delete_meeting()
             self.context.clear()
         self._set_overlay_visible(False, bring_main=True)
