@@ -22,11 +22,15 @@ import json
 import logging
 import re
 import secrets as stdlib_secrets
+import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 import urllib.parse
 import webbrowser
+from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -121,6 +125,28 @@ def _free_ports(count: int) -> list[int]:
     return found
 
 
+def launch_auth_window(url: str) -> bool:
+    """Opens OAuth in an isolated native app window on Windows (Edge app mode) to prevent
+    third-party browser shields (such as Brave) from blocking local RFC 8252 loopback callbacks.
+    Automatically closes upon authorization callback completion.
+    Falls back to webbrowser.open() if Edge is not found or on non-Windows.
+    """
+    if sys.platform == "win32":
+        for env_var in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
+            base = os.environ.get(env_var)
+            if not base:
+                continue
+            edge = Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            if edge.is_file():
+                try:
+                    subprocess.Popen([str(edge), f"--app={url}", "--window-size=680,780"])
+                    return True
+                except Exception as exc:
+                    log.warning("Could not launch Edge auth window: %s", exc)
+                    break
+    return bool(webbrowser.open(url))
+
+
 class NotionMcp:
     def __init__(
         self,
@@ -133,7 +159,7 @@ class NotionMcp:
         self.secrets = secrets
         self.http = http
         self.mcp_url = mcp_url
-        self._open_browser = open_browser if open_browser is not None else webbrowser.open
+        self._open_browser = open_browser if open_browser is not None else launch_auth_window
         self._clock = clock
         self._flow_lock = threading.RLock()
         self._token_lock = threading.Lock()  # one refresh at a time: refresh tokens rotate

@@ -268,29 +268,8 @@ function ProviderCard({ provider, ctl }) {
           <p className="text-xs leading-relaxed text-muted">
             {isGoogle
               ? "Finish signing in with Google in your browser. This checks every 2 seconds for up to 2 minutes."
-              : "In Notion, select your workspace and click Continue. Note: If you use Brave Browser, turn Brave Shields OFF on notion.com so Brave allows the redirect back to Escort."}
+              : "Notion opened in a secure sign-in window. Select your workspace and click Continue. The window will close automatically once approved."}
           </p>
-          {!isGoogle ? (
-            <div className="space-y-1.5 pt-1">
-              <p className="text-[12px] text-faint">
-                If your browser blocked the redirect or you have an internal integration token (starts with ntn_ or secret_ from notion.so/profile/integrations), paste it or the callback URL here:
-              </p>
-              <form onSubmit={submitToken} className="flex gap-2">
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="Paste callback URL or ntn_… / secret_…"
-                  aria-label="Callback URL or integration token"
-                  className="field h-8 min-w-0 flex-1 px-3 text-[12.5px]"
-                />
-                <Button type="submit" size="sm" disabled={!token.trim() || busy === "checking"}>
-                  {busy === "checking" ? "Connecting…" : "Connect"}
-                </Button>
-              </form>
-            </div>
-          ) : null}
         </div>
       ) : null}
       {error ? (

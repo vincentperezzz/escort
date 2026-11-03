@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { UploadSimple, Trash, CaretDown, ArrowUpRight, Sparkle, MagnifyingGlass } from "@phosphor-icons/react";
+import { UploadSimple, Trash, CaretDown, ArrowUpRight, Sparkle, MagnifyingGlass, ArrowsClockwise, Folder } from "@phosphor-icons/react";
 import { Bezel, Button, Panel, PageHeader, Pill } from "../components/ui.jsx";
 import ConnectAccounts from "../components/ConnectAccounts.jsx";
 import GoogleImport from "../components/GoogleImport.jsx";
@@ -10,6 +10,35 @@ export default function ContextScreen({ status, refresh, go }) {
   const sections = status?.meeting?.prd_sections || [];
   const [paste, setPaste] = useState("");
   const [drag, setDrag] = useState(false);
+  const activeProj = status?.active_project || {};
+  const [folderPath, setFolderPath] = useState(activeProj.folder_path || "");
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderMsg, setFolderMsg] = useState("");
+
+  useEffect(() => {
+    setFolderPath(activeProj.folder_path || "");
+    setFolderMsg("");
+  }, [activeProj.id, activeProj.folder_path]);
+
+  async function saveAndSyncFolder() {
+    if (!activeProj.id) return;
+    setFolderBusy(true);
+    setFolderMsg("");
+    try {
+      await api(`/api/projects/${activeProj.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ folder_path: folderPath.trim() }),
+      });
+      const res = await post(`/api/projects/${activeProj.id}/sync-folder`, {});
+      const count = (res?.synced || []).length;
+      setFolderMsg(`Synced ${count} file${count === 1 ? "" : "s"} from folder into ${activeProj.name || "project"}.`);
+      refresh();
+    } catch (err) {
+      setFolderMsg(`Sync error: ${err.message}`);
+    } finally {
+      setFolderBusy(false);
+    }
+  }
   const [notionQ, setNotionQ] = useState("BayaniPay");
   const [notionHits, setNotionHits] = useState([]);
   const [proposals, setProposals] = useState(ctx.prep?.proposals || []);
@@ -141,6 +170,36 @@ export default function ContextScreen({ status, refresh, go }) {
                 Add pasted notes
               </Button>
             </form>
+          </Panel>
+
+          <Panel
+            title="Local Watch Folder"
+            hint={`Auto-syncs .md, .txt, .pdf, or .docx files into ${activeProj.name || "this project"}.`}
+          >
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={folderPath}
+                  onChange={(e) => setFolderPath(e.target.value)}
+                  placeholder="e.g. C:\Users\username\Documents\ClientNotes"
+                  className="field h-10 min-w-0 flex-1 px-3.5 text-xs font-mono"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={saveAndSyncFolder}
+                  disabled={folderBusy || !folderPath.trim()}
+                >
+                  <ArrowsClockwise size={13} className={folderBusy ? "animate-spin" : ""} />
+                  Save & Sync
+                </Button>
+              </div>
+              <p className="text-[11px] text-faint">
+                Every file placed in this directory will be chunked into sections for live conflict detection and prep chat.
+              </p>
+              {folderMsg ? <p className="text-xs text-commit">{folderMsg}</p> : null}
+            </div>
           </Panel>
 
           <div className="grid gap-5 md:grid-cols-2">

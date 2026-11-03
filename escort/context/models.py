@@ -79,3 +79,33 @@ class MatchProposal:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class Project:
+    id: str
+    name: str
+    description: str = ""
+    calendar_keywords: list[str] = field(default_factory=list)
+    calendar_domains: list[str] = field(default_factory=list)
+    folder_path: str = ""
+    auto_switch: bool = True
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> Project:
+        return cls(
+            id=str(raw.get("id") or ""),
+            name=str(raw.get("name") or "Untitled Project"),
+            description=str(raw.get("description") or ""),
+            calendar_keywords=[str(k).strip() for k in raw.get("calendar_keywords") or [] if str(k).strip()],
+            calendar_domains=[str(d).strip().lower() for d in raw.get("calendar_domains") or [] if str(d).strip()],
+            folder_path=str(raw.get("folder_path") or ""),
+            auto_switch=bool(raw.get("auto_switch", True)),
+            created_at=float(raw.get("created_at") or 0.0),
+            updated_at=float(raw.get("updated_at") or 0.0),
+        )

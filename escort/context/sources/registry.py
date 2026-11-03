@@ -99,7 +99,9 @@ class Connectors:
         self.http = http or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True)
         self.google = GoogleAuth(secrets, self.http, client_id_getter=client_id_getter, open_browser=open_browser, bundled_path=bundled_path, user_path=user_path)
         self.notion = NotionClient(secrets, self.http)  # pasted integration token (REST), the fallback
-        self.notion_mcp = NotionMcp(secrets, self.http, open_browser=open_browser)  # one-click OAuth (MCP)
+        from escort.context.sources.notion_mcp import launch_auth_window
+        browser_launcher = open_browser if open_browser is not None else launch_auth_window
+        self.notion_mcp = NotionMcp(secrets, self.http, open_browser=browser_launcher)  # one-click OAuth (MCP)
         self.generation = 0
         self.google.on_change = self._bump
         self.notion.on_change = self._bump

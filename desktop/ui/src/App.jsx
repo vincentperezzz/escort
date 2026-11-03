@@ -9,6 +9,8 @@ import ContextScreen from "./screens/ContextScreen.jsx";
 import Recap from "./screens/Recap.jsx";
 import Settings from "./screens/Settings.jsx";
 import Overlay from "./screens/Overlay.jsx";
+import ProjectSelector from "./components/ProjectSelector.jsx";
+import SwitchConfirmationBanner from "./components/SwitchConfirmationBanner.jsx";
 
 const NAV = [
   { id: "home", label: "Home", Icon: House },
@@ -149,6 +151,8 @@ function Shell({ route }) {
             <span className="hidden text-[13.5px] font-semibold tracking-[-0.01em] sm:inline">Escort</span>
           </button>
           <span className="mr-1 hidden h-5 w-px bg-white/10 sm:block" aria-hidden />
+          <ProjectSelector status={status} refresh={refresh} />
+          <span className="mx-1 hidden h-5 w-px bg-white/10 sm:block" aria-hidden />
           {NAV.map(({ id, label, Icon }) => {
             const active = screen === id;
             const count = id === "context" ? badge : id === "live" ? cardCount : 0;
@@ -195,6 +199,8 @@ function Shell({ route }) {
           ) : null}
         </nav>
       </header>
+
+      <SwitchConfirmationBanner status={status} refresh={refresh} />
 
       <main className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col">
         {screen === "live" ? (

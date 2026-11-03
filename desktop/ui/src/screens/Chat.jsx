@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, CalendarBlank, FileText, Plus } from "@phosphor-icons/react";
+import { ArrowUp, CalendarBlank, FileText, Plus, Folder } from "@phosphor-icons/react";
 import Logo from "../components/Logo.jsx";
 import ChangedChips from "../components/ChangedChips.jsx";
 import FormattedText from "../components/FormattedText.jsx";
@@ -16,6 +16,7 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 
 export default function Chat({ status, refresh, go, seed = "" }) {
   const ctx = status?.context || {};
+  const activeProj = status?.active_project || { id: "proj_default", name: "General" };
   const serverChat = ctx.chat || [];
   const [local, setLocal] = useState(null);
   const [input, setInput] = useState(() => {
@@ -46,6 +47,15 @@ export default function Chat({ status, refresh, go, seed = "" }) {
   useEffect(() => {
     scrollToEnd(chat.length > 0);
   }, [chat.length, pending]);
+
+  async function clearSession() {
+    setLocal([]);
+    try {
+      await post("/api/context/clear-chat", {});
+    } finally {
+      refresh();
+    }
+  }
 
   async function send(text) {
     const message = text.trim();
@@ -81,7 +91,7 @@ export default function Chat({ status, refresh, go, seed = "" }) {
       <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-auto px-4 md:px-8">
         <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col">
           {empty ? (
-            <EmptyHero prepEvent={prepEvent} onPick={send} />
+            <EmptyHero prepEvent={prepEvent} onPick={send} activeProj={activeProj} />
           ) : (
             <ol className="flex flex-col gap-7 pb-8 pt-10" aria-live="polite">
               {chat.map((turn, i) => (
@@ -96,7 +106,7 @@ export default function Chat({ status, refresh, go, seed = "" }) {
 
       <div className="shrink-0 px-4 pb-6 pt-2 md:px-8">
         <div className="mx-auto w-full max-w-[46rem]">
-          <SourceChips items={items} prepEvent={prepEvent} go={go} />
+          <SourceChips items={items} prepEvent={prepEvent} go={go} activeProj={activeProj} onClear={clearSession} chatCount={chat.length} />
           <Composer value={input} onChange={setInput} onSend={() => send(input)} pending={pending} />
           {error ? (
             <p className="mt-3 px-2 text-[13px] text-conflict" role="alert">
@@ -104,7 +114,7 @@ export default function Chat({ status, refresh, go, seed = "" }) {
             </p>
           ) : (
             <p className="mt-3 px-2 text-center text-[12px] text-faint">
-              Escort AI uses your loaded notes, live call transcript, and screen. Enter to send, Shift+Enter for a new line.
+              Escort AI is answering from {activeProj?.name || "your project"}'s loaded context, notes, and screen. Enter to send, Shift+Enter for a new line.
             </p>
           )}
         </div>
@@ -113,17 +123,21 @@ export default function Chat({ status, refresh, go, seed = "" }) {
   );
 }
 
-function EmptyHero({ prepEvent, onPick }) {
+function EmptyHero({ prepEvent, onPick, activeProj }) {
   return (
     <div className="rise flex flex-1 flex-col items-center justify-center py-12 text-center">
       <Logo size={56} />
-      <h1 className="mt-7 max-w-[20ch] text-[36px] font-semibold leading-[1.08] tracking-[-0.035em] text-balance">
+      <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-accent/[0.12] px-3.5 py-1 text-xs font-medium text-accent hairline">
+        <Folder size={13} weight="fill" />
+        <span>Project: {activeProj?.name || "General"}</span>
+      </div>
+      <h1 className="mt-4 max-w-[20ch] text-[36px] font-semibold leading-[1.08] tracking-[-0.035em] text-balance">
         What do you want to walk in knowing?
       </h1>
       <p className="mt-3 max-w-md text-[15px] leading-relaxed text-muted text-pretty">
         {prepEvent
           ? `Prepping for ${prepEvent.title}, ${formatEventWhen(prepEvent.start)}.`
-          : "Ask about your notes, the scope, or what the other side is likely to push for."}
+          : `Grounded in ${activeProj?.name || "your project"}'s files and context. Ask anything about scope, commitments, or open questions.`}
       </p>
       <div className="mt-9 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-2">
         {SUGGESTIONS.map((s, i) => (
@@ -143,10 +157,14 @@ function EmptyHero({ prepEvent, onPick }) {
   );
 }
 
-function SourceChips({ items, prepEvent, go }) {
+function SourceChips({ items, prepEvent, go, activeProj, onClear, chatCount }) {
   const shown = items.slice(0, 3);
   return (
     <div className="mb-3 flex flex-wrap items-center gap-1.5 px-1" aria-label="Context sources">
+      <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-accent/[0.1] px-3 text-[12px] font-medium text-[#c6bfff] hairline">
+        <Folder size={13} weight="fill" />
+        <span className="max-w-[120px] truncate">{activeProj?.name || "General"}</span>
+      </span>
       {prepEvent ? (
         <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[12px] text-[#c6bfff]">
           <CalendarBlank size={13} aria-hidden />
@@ -171,6 +189,17 @@ function SourceChips({ items, prepEvent, go }) {
         <Plus size={13} aria-hidden />
         {items.length ? "Context" : "Add context"}
       </button>
+      {chatCount > 0 ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="press ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-[12px] text-faint hover:bg-white/[0.05] hover:text-ink"
+          title="Start fresh session for this project"
+        >
+          <Plus size={13} aria-hidden />
+          <span>New chat</span>
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -243,11 +243,21 @@ class ContextLibrary:
         self.data["chat"] = self.data["chat"][-40:]
         self._save()
 
+    def switch_root(self, new_root: Path) -> None:
+        self.root = new_root
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.path = self.root / "context.json"
+        self._load()
+
+    def clear_chat(self) -> None:
+        self.data["chat"] = []
+        self._save()
+
     def clear(self) -> None:
         self.data = {"items": [], "prep": {}, "chat": []}
         self._save()
 
-    def public_view(self) -> dict[str, Any]:
+    def public_view(self, active_project: Any | None = None, projects: list[Any] | None = None) -> dict[str, Any]:
         prep = self.data.get("prep") or {}
         return {
             "items": [item.to_dict() for item in self.items()],
@@ -255,4 +265,6 @@ class ContextLibrary:
             "upcoming": [event.to_dict() for event in self.upcoming_events(6)],
             "prep": prep,
             "chat": self.chat_history(),
+            "active_project": active_project.to_dict() if active_project and hasattr(active_project, "to_dict") else None,
+            "projects": [p.to_dict() if hasattr(p, "to_dict") else p for p in projects or []],
         }

@@ -272,6 +272,46 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
             runtime.connectors.google.on_change()
         return runtime.public_status()
 
+    # --- Projects / Topics -----------------------------------------------------------
+    @app.get("/api/projects")
+    def list_projects() -> dict:
+        return {
+            "projects": [p.to_dict() for p in runtime.projects.list_projects()],
+            "active_project": runtime.projects.get_active_project().to_dict(),
+        }
+
+    @app.post("/api/projects")
+    def create_project(body: dict) -> dict:
+        return runtime.create_project(body)
+
+    @app.put("/api/projects/{project_id}")
+    def update_project(project_id: str, body: dict) -> dict:
+        return runtime.update_project(project_id, body)
+
+    @app.delete("/api/projects/{project_id}")
+    def delete_project(project_id: str) -> dict:
+        return runtime.delete_project(project_id)
+
+    @app.post("/api/projects/{project_id}/activate")
+    def activate_project(project_id: str) -> dict:
+        return runtime.set_active_project(project_id)
+
+    @app.post("/api/projects/{project_id}/sync-folder")
+    def sync_project_folder(project_id: str) -> dict:
+        return runtime.sync_project_folder(project_id)
+
+    @app.post("/api/projects/dismiss-suggestion")
+    def dismiss_suggestion(body: dict) -> dict:
+        return runtime.dismiss_project_suggestion(str(body.get("suggestion_id") or ""))
+
+    @app.post("/api/projects/reset")
+    def reset_projects(body: dict) -> dict:
+        return runtime.reset_projects(str(body.get("name") or "General"), str(body.get("description") or ""))
+
+    @app.post("/api/context/clear-chat")
+    def clear_chat() -> dict:
+        return runtime.clear_chat()
+
     if ui_dir and (ui_dir / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=ui_dir / "assets"), name="assets")
 

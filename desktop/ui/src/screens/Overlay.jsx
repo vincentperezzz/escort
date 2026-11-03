@@ -125,6 +125,7 @@ export default function Overlay() {
   const [answer, setAnswer] = useState(null); // { label, text } | { label, pending: true } | { label, error }
   const [acting, setActing] = useState("");
 
+  const activeProj = status?.active_project;
   const listening = Boolean(status?.listening);
   const startedAt = listeningSince(status);
   const meeting = status?.meeting;
@@ -212,6 +213,7 @@ export default function Overlay() {
         onToggle={toggleCollapsed}
         onListen={toggleListen}
         onOpenApp={openMainApp}
+        project={activeProj}
       />
 
       {!collapsed && tuning ? <TuneBar opacity={opacity} onCommit={commitOpacity} /> : null}
@@ -231,7 +233,7 @@ export default function Overlay() {
           </section>
           <div data-hit className="ov-glass flex shrink-0 flex-col gap-1 rounded-[24px] p-1.5">
             <QuickRow onAsk={ask} busy={busy} />
-            <Composer onAsk={ask} busy={busy} />
+            <Composer onAsk={ask} busy={busy} project={activeProj} />
           </div>
         </>
       ) : null}
@@ -248,7 +250,7 @@ const Clock = memo(function Clock({ listening, startedAt }) {
   );
 });
 
-const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, count, open, tuning, onTune, onToggle, onListen, onOpenApp }) {
+const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, count, open, tuning, onTune, onToggle, onListen, onOpenApp, project }) {
   const drag = useWindowDrag();
   return (
     <div
@@ -269,6 +271,11 @@ const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, co
       </button>
       <div className="flex min-w-0 flex-1 items-baseline gap-2 pl-1.5">
         {listening ? <Clock listening={listening} startedAt={startedAt} /> : <span className="shrink-0 text-[13px] font-medium text-muted">{offline ? "Escort offline" : "Ready"}</span>}
+        {project?.name && project.name !== "General" ? (
+          <span className="mono shrink-0 self-center rounded-full bg-accent/[0.15] px-2 text-[10.5px] font-medium leading-4 text-accent truncate max-w-[100px]">
+            {project.name}
+          </span>
+        ) : null}
         {title && listening ? <span className="truncate text-[12px] text-faint">{title}</span> : null}
         {count ? <span className="mono shrink-0 self-center rounded-full bg-white/[0.07] px-1.5 text-[10.5px] leading-4 text-muted">{count}</span> : null}
       </div>
@@ -408,7 +415,7 @@ const QuickRow = memo(function QuickRow({ onAsk, busy }) {
  * is reported to the backend once per change; the native window only becomes
  * focusable while the caret is in this field.
  */
-const Composer = memo(function Composer({ onAsk, busy }) {
+const Composer = memo(function Composer({ onAsk, busy, project }) {
   const [input, setInput] = useState("");
   const inputRef = useRef(null);
   const reported = useRef(false);
@@ -475,7 +482,7 @@ const Composer = memo(function Composer({ onAsk, busy }) {
             if (!busy) onAsk(QUICK[0].label, QUICK[0].prompt);
           }
         }}
-        placeholder="Ask Escort AI…"
+        placeholder={project?.name && project.name !== "General" ? `Ask ${project.name}…` : "Ask Escort AI…"}
         aria-label="Ask Escort AI"
         autoComplete="off"
         className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint focus-visible:outline-none"

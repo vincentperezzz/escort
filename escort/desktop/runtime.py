@@ -129,7 +129,9 @@ class DesktopRuntime:
         self._notion_plans: dict[str, dict[str, Any]] = {}  # confirmation previews waiting for Confirm / Cancel
         # One Google Doc per meeting; a new id when a new listening session starts or the meeting is deleted.
         self.meeting_id = new_id("mtg")
-        self.context = ContextLibrary(store.media_dir.parent, self.secrets.get, connectors=self.connectors)
+        from escort.context.project import ProjectManager
+        self.projects = ProjectManager(store.media_dir.parent)
+        self.context = ContextLibrary(self.projects.get_active_project_dir(), self.secrets.get, connectors=self.connectors)
 
     def _context_root(self) -> Path:
         return self.store.media_dir.parent
@@ -232,7 +234,14 @@ class DesktopRuntime:
 
     def public_status(self) -> dict[str, Any]:
         snapshot = self.store.snapshot()
+        active_project = self.projects.get_active_project()
+        all_projects = self.projects.list_projects()
+        upcoming = self.context.upcoming_events(3)
+        suggestion = self.projects.suggested_switch(upcoming)
         return {
+            "active_project": active_project.to_dict() if active_project else None,
+            "projects": [p.to_dict() for p in all_projects],
+            "suggested_project": suggestion,
             "listening": self.listening,
             "listening_started_at": self.listening_started_at,
             "screen": self.screen_status(),
@@ -252,7 +261,7 @@ class DesktopRuntime:
             "monitors": self.monitors_status(),
             "devices": list_audio_devices(),
             "meeting": snapshot,
-            "context": self.context.public_view(),
+            "context": self.context.public_view(active_project, all_projects),
             "connectors": self.connectors.status(),
             "notes_drive": self.notes_drive_status(),
             "notes": self.notes_status(),
@@ -276,6 +285,67 @@ class DesktopRuntime:
                 if key in body:
                     self.prefs[key] = body[key].strip() if key == "google_client_id" and isinstance(body[key], str) else body[key]
             self._write_prefs()
+        return self.public_status()
+
+    def set_active_project(self, project_id: str) -> dict[str, Any]:
+        with self._lock:
+            self.projects.set_active_project(project_id)
+            self.context.switch_root(self.projects.get_active_project_dir())
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def create_project(self, body: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            proj = self.projects.create_project(
+                name=str(body.get("name") or "New Project"),
+                description=str(body.get("description") or ""),
+                calendar_keywords=body.get("calendar_keywords"),
+                calendar_domains=body.get("calendar_domains"),
+                folder_path=str(body.get("folder_path") or ""),
+                auto_switch=bool(body.get("auto_switch", True)),
+            )
+            if body.get("activate"):
+                self.projects.set_active_project(proj.id)
+                self.context.switch_root(self.projects.get_active_project_dir())
+                self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def update_project(self, project_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self.projects.update_project(project_id, updates)
+            if updates.get("folder_path"):
+                self.projects.sync_local_folder(project_id, self.context)
+                self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def delete_project(self, project_id: str) -> dict[str, Any]:
+        with self._lock:
+            self.projects.delete_project(project_id)
+            self.context.switch_root(self.projects.get_active_project_dir())
+            self.context.apply_to_store(self.store)
+        return self.public_status()
+
+    def clear_chat(self) -> dict[str, Any]:
+        with self._lock:
+            self.context.clear_chat()
+        return self.public_status()
+
+    def sync_project_folder(self, project_id: str) -> dict[str, Any]:
+        with self._lock:
+            synced = self.projects.sync_local_folder(project_id, self.context)
+            if synced:
+                self.context.apply_to_store(self.store)
+        return {"synced": synced, "status": self.public_status()}
+
+    def dismiss_project_suggestion(self, suggestion_id: str) -> dict[str, Any]:
+        self.projects.dismiss_suggestion(suggestion_id)
+        return self.public_status()
+
+    def reset_projects(self, name: str = "General", description: str = "") -> dict[str, Any]:
+        with self._lock:
+            self.projects.reset_all(name, description)
+            self.context.switch_root(self.projects.get_active_project_dir())
+            self.context.apply_to_store(self.store)
         return self.public_status()
 
     def set_prd(self, text: str, name: str = "uploaded.md") -> dict[str, Any]:
