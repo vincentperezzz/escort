@@ -15,15 +15,13 @@ const SECTIONS = [
   { id: "privacy", label: "Privacy", Icon: ShieldCheck },
 ];
 
-const SECRETS = { meta_api_key: "", whatsapp_access_token: "", whatsapp_verify_token: "" };
+const SECRETS = { meta_api_key: "" };
 
 /** The /api/setup form, shared by Connections (keys) and Audio (devices). */
 function useSetupForm(status, refresh) {
   const prefs = status?.prefs || {};
   const [form, setForm] = useState({
     ...SECRETS,
-    whatsapp_phone_number_id: prefs.whatsapp_phone_number_id || "",
-    whatsapp_allowed_numbers: prefs.whatsapp_allowed_numbers || "",
     mic_id: prefs.mic_id || "",
     loopback_id: prefs.loopback_id || "",
   });
@@ -33,12 +31,10 @@ function useSetupForm(status, refresh) {
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      whatsapp_phone_number_id: prefs.whatsapp_phone_number_id || "",
-      whatsapp_allowed_numbers: prefs.whatsapp_allowed_numbers || "",
       mic_id: prefs.mic_id || "",
       loopback_id: prefs.loopback_id || "",
     }));
-  }, [prefs.mic_id, prefs.loopback_id, prefs.whatsapp_allowed_numbers, prefs.whatsapp_phone_number_id]);
+  }, [prefs.mic_id, prefs.loopback_id]);
 
   const set = (key) => (value) => {
     setSaved(false);
@@ -202,8 +198,6 @@ function General({ status, refresh }) {
         <dl className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2.5 px-5 pb-5 pt-3 text-sm">
           <dt className="text-muted">MCP</dt>
           <dd className="mono truncate text-[13px]">{status?.mcp ?? "unknown"}</dd>
-          <dt className="text-muted">WhatsApp</dt>
-          <dd className="mono truncate text-[13px]">{status?.whatsapp ?? "unknown"}</dd>
           {latency?.count ? (
             <>
               <dt className="text-muted">Card latency</dt>
@@ -265,15 +259,6 @@ function Connections({ status, refresh, setup }) {
             />
           </div>
           <SaveBar setup={setup} label={keySaved ? "Update key" : "Save key"} />
-        </Group>
-        <Group title="WhatsApp demo" hint="Hackathon allowlist only, not a production rollout.">
-          <div className="grid gap-4 px-5 pb-2 pt-3 sm:grid-cols-2">
-            <Field label="Access token" type="password" autoComplete="off" value={form.whatsapp_access_token} onChange={set("whatsapp_access_token")} placeholder={status?.has_whatsapp_token ? "Saved" : "Test token"} />
-            <Field label="Verify token" type="password" autoComplete="off" value={form.whatsapp_verify_token} onChange={set("whatsapp_verify_token")} placeholder="You choose this" />
-            <Field label="Phone number ID" value={form.whatsapp_phone_number_id} onChange={set("whatsapp_phone_number_id")} />
-            <Field label="Allowlist" value={form.whatsapp_allowed_numbers} onChange={set("whatsapp_allowed_numbers")} placeholder="1555…" />
-          </div>
-          <SaveBar setup={setup} label="Save WhatsApp" />
         </Group>
       </form>
     </>

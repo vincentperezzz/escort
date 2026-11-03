@@ -338,8 +338,7 @@ function status() {
     capture_error: params.get("capture") === "error" ? "Screen capture is blocked by another app. Escort will keep retrying." : null,
     listening_started_at: state.listening ? state.listening_started_at : null,
     has_meta_key: true,
-    has_whatsapp_token: false,
-    prefs: { mic_id: "mic-1", loopback_id: "", whatsapp_phone_number_id: "", whatsapp_allowed_numbers: "" },
+    prefs: { mic_id: "mic-1", loopback_id: "" },
     devices: [
       { id: "mic-1", kind: "mic", name: "Shure MV7" },
       { id: "mic-2", kind: "mic", name: "MacBook microphone" },
@@ -350,7 +349,6 @@ function status() {
     notes_drive: notesStatus(),
     notes: combinedNotes(),
     mcp: "http://127.0.0.1:8747/mcp",
-    whatsapp: "http://127.0.0.1:8748/webhook",
   };
 }
 
