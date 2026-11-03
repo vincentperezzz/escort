@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowSquareOut, CheckCircle, FileText, GoogleDriveLogo, LinkSimple, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, FileText, LinkSimple, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
+import { GoogleLogo } from "./BrandIcons.jsx";
 import ConnectAccounts from "./ConnectAccounts.jsx";
 import { Button } from "./ui.jsx";
 import ContextDialog from "./context/ContextDialog.jsx";
@@ -150,6 +151,7 @@ export default function GoogleImportDialog({ onClose, refresh, onConnectAccounts
           <p className="mb-4 text-sm text-muted">Connect Google to import Docs, Sheets, Slides, and Drive files.</p>
           <ConnectAccounts
             compact
+            providers={["google"]}
             onChange={() => {
               loadGoogle().then((row) => {
                 if (row?.connected) {
@@ -315,7 +317,7 @@ function DrivePicker({ google, pick, waiting, onPick, onAllow, onConnect }) {
     note = "Connect your Google account to pick PDFs, Word, text and Markdown files or Google files from your Drive.";
     action = (
       <Button size="sm" onClick={onConnect}>
-        <GoogleDriveLogo size={15} aria-hidden /> Connect Google
+        <GoogleLogo size={15} aria-hidden /> Connect Google
       </Button>
     );
   } else if (!hasKey) {
@@ -339,7 +341,7 @@ function DrivePicker({ google, pick, waiting, onPick, onAllow, onConnect }) {
     note = "PDF, Word, text, Markdown, and Google Docs, Sheets and Slides. Up to 15 MB.";
     action = (
       <Button size="sm" variant="primary" onClick={onPick} disabled={Boolean(busy)}>
-        <GoogleDriveLogo size={15} aria-hidden />
+        <GoogleLogo size={15} aria-hidden />
         {busy === "opening" ? "Opening Drive…" : busy === "importing" ? "Importing…" : "Pick from Drive"}
       </Button>
     );

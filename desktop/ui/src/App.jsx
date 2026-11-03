@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IconContext, House, Sparkle, Waveform, FileText, ListChecks, GearSix, ArrowSquareOut } from "@phosphor-icons/react";
+import { IconContext, House, Sparkle, Waveform, FileText, GearSix, ArrowSquareOut } from "@phosphor-icons/react";
 import { api, post } from "./lib/api.js";
 import Logo, { logoSvg } from "./components/Logo.jsx";
 import Home from "./screens/Home.jsx";
 import Chat from "./screens/Chat.jsx";
 import Live from "./screens/Live.jsx";
 import ContextScreen from "./screens/ContextScreen.jsx";
-import Recap from "./screens/Recap.jsx";
 import Settings from "./screens/Settings.jsx";
 import Overlay from "./screens/Overlay.jsx";
 import ProjectSelector from "./components/ProjectSelector.jsx";
@@ -19,7 +18,6 @@ const NAV = [
   { id: "chat", label: "Prep chat", Icon: Sparkle },
   { id: "live", label: "Live", Icon: Waveform },
   { id: "context", label: "Context", Icon: FileText },
-  { id: "recap", label: "Recap", Icon: ListChecks },
   { id: "settings", label: "Settings", Icon: GearSix },
 ];
 
@@ -27,6 +25,10 @@ const LEGACY = { prd: ["context"], notes: ["context"], setup: ["settings", "conn
 
 function parseRoute() {
   const [rawName = "", sub = ""] = window.location.hash.replace(/^#\/?/, "").split("/");
+  if (rawName === "recap") {
+    const liveSub = sub ? `recap/${sub}` : "recap";
+    return { name: "live", sub: liveSub };
+  }
   const [name, legacySub] = LEGACY[rawName] || [rawName];
   if (name === "overlay") return { name, sub: "" };
   return NAV.some(({ id }) => id === name) ? { name, sub: sub || legacySub || "" } : { name: "home", sub: "" };
@@ -123,13 +125,20 @@ function Shell({ route }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Stopping (from here or from the overlay) lands on Recap, where the summary appears.
   const wasListening = useRef(null);
+  const [justEndedRecap, setJustEndedRecap] = useState(false);
   useEffect(() => {
     if (!status) return;
-    if (wasListening.current === true && !listening) window.location.hash = "/recap";
+    if (wasListening.current === true && !listening) {
+      window.location.hash = "/live/recap";
+      setJustEndedRecap(true);
+    }
     wasListening.current = listening;
   }, [listening, status]);
+  useEffect(() => {
+    if (route.name !== "live") setJustEndedRecap(false);
+    else if (route.sub && !route.sub.startsWith("recap")) setJustEndedRecap(false);
+  }, [route.name, route.sub]);
 
   useFaviconState(listening);
 
@@ -217,6 +226,9 @@ function Shell({ route }) {
             refresh={refresh}
             setListening={setListening}
             go={go}
+            liveSub={route.sub}
+            justEndedRecap={justEndedRecap}
+            onClearJustEndedRecap={() => setJustEndedRecap(false)}
             transcriptOpen={transcriptOpen}
             onToggleTranscript={() => setTranscriptOpen((v) => !v)}
           />
@@ -226,7 +238,6 @@ function Shell({ route }) {
           <div className="scroll-thin min-h-0 flex-1 overflow-auto px-4 pb-16 pt-10 md:px-10 md:pt-14">
             {screen === "home" ? <Home status={status} refresh={refresh} go={go} setListening={setListening} /> : null}
             {screen === "context" ? <ContextScreen status={status} refresh={refresh} go={go} /> : null}
-            {screen === "recap" ? <Recap status={status} refresh={refresh} tab={route.sub} go={go} /> : null}
             {screen === "settings" ? <Settings status={status} refresh={refresh} section={route.sub} go={go} /> : null}
           </div>
         )}

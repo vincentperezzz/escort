@@ -55,6 +55,45 @@ MODES = ("auto", "live", "mock")
 CALENDAR_TTL_S = 60.0
 
 
+class FolderWatchHandle:
+    def __init__(self, project_id: str, folder_path: str) -> None:
+        self.project_id = project_id
+        self.folder_path = folder_path
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+_folder_watches: dict[str, FolderWatchHandle] = {}
+_folder_watch_lock = threading.Lock()
+
+
+def register_folder_watch(project_id: str, folder_path: str) -> None:
+    clean = str(folder_path or "").strip()
+    with _folder_watch_lock:
+        existing = _folder_watches.pop(project_id, None)
+        if existing:
+            existing.stop()
+        if clean:
+            _folder_watches[project_id] = FolderWatchHandle(project_id, clean)
+
+
+def stop_folder_watch(project_id: str) -> bool:
+    with _folder_watch_lock:
+        handle = _folder_watches.pop(project_id, None)
+    if handle is None:
+        return False
+    handle.stop()
+    return True
+
+
+def folder_watch_active(project_id: str) -> bool:
+    with _folder_watch_lock:
+        handle = _folder_watches.get(project_id)
+    return handle is not None and not handle.stopped
+
+
 def connector_mode() -> str:
     mode = os.environ.get("ESCORT_CONNECTORS", "auto").strip().lower()
     return mode if mode in MODES else "auto"

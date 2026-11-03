@@ -132,6 +132,7 @@ export default function NotionImportDialog({ onClose, onImported, onConnectAccou
           <p className="mb-4 text-sm text-muted">Connect Notion to search and import pages into this project.</p>
           <ConnectAccounts
             compact
+            providers={["notion"]}
             onChange={() => {
               loadStatus().then((row) => {
                 if (row?.connected) onConnectAccounts?.();

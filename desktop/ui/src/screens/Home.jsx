@@ -320,7 +320,7 @@ function Earlier({ className, status, go }) {
           </div>
           <div className="flex items-center gap-3">
             {latest.current && summaryState === "ready" ? <Pill tone="accent">Summary ready</Pill> : null}
-            <Button variant="secondary" onClick={() => go("recap", sub)} trailing={<ArrowUpRight size={15} />}>
+            <Button variant="secondary" onClick={() => go("live", sub ? `recap/${sub}` : "recap")} trailing={<ArrowUpRight size={15} />}>
               Open summary
             </Button>
           </div>

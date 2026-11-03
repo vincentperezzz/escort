@@ -54,13 +54,15 @@ export default function ContextFilesList({ items, filter, onFilter, onRemove, dr
         ) : (
           <ul className="divide-y divide-white/[0.06] rounded-2xl bg-white/[0.02] hairline">
             {filtered.map((item) => {
-              const Icon = itemIcon(item);
+              const iconDef = itemIcon(item);
               const status = itemStatus(item);
               const imported = itemImportedLabel(item);
+              const BrandLogo = iconDef?.type === "brand" ? iconDef.Logo : null;
+              const RowIcon = iconDef?.type === "brand" ? null : iconDef;
               return (
                 <li key={item.id} className="flex items-start gap-3 px-4 py-3.5 hover:bg-white/[0.03]">
                   <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/[0.05] text-[#c6bfff] hairline">
-                    <Icon size={18} weight="duotone" aria-hidden />
+                    {BrandLogo ? <BrandLogo size={18} aria-hidden /> : RowIcon ? <RowIcon size={18} weight="duotone" aria-hidden /> : null}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">

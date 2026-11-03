@@ -7,8 +7,65 @@ import ScreenLine from "../components/ScreenLine.jsx";
 import NoteDestination, { UpdatePreview } from "../components/NoteDestination.jsx";
 import { DEST_LABEL, cancelNotePage, confirmNotePage, isPageDest, noteHint, previewNotePage, saveNote, useNoteDestination } from "../lib/notes.js";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
+import LiveIdle from "../components/live/LiveIdle.jsx";
+import RecapPanel from "../components/live/RecapPanel.jsx";
+import { liveRecapHash, parseLiveSub } from "../components/live/parseLiveRoute.js";
 
-export default function Live({ status, refresh, setListening, go, transcriptOpen, onToggleTranscript }) {
+export default function Live({ status, refresh, setListening, go, liveSub, justEndedRecap, onClearJustEndedRecap, transcriptOpen, onToggleTranscript }) {
+  const listening = Boolean(status?.listening);
+  const route = parseLiveSub(liveSub);
+  const [busy, setBusy] = useState(false);
+
+  if (listening) {
+    return (
+      <LiveActive
+        status={status}
+        refresh={refresh}
+        setListening={setListening}
+        go={go}
+        transcriptOpen={transcriptOpen}
+        onToggleTranscript={onToggleTranscript}
+        busy={busy}
+        setBusy={setBusy}
+      />
+    );
+  }
+
+  if (route.view === "recap") {
+    const showStartAnother = justEndedRecap && !route.sessionId;
+    return (
+      <RecapPanel
+        status={status}
+        refresh={refresh}
+        sessionId={route.sessionId}
+        tab={route.tab}
+        go={go}
+        showStartAnother={showStartAnother}
+        onStartAnother={() => {
+          onClearJustEndedRecap?.();
+          go("live");
+        }}
+        onBack={() => {
+          onClearJustEndedRecap?.();
+          go("live");
+        }}
+      />
+    );
+  }
+
+  return (
+    <LiveIdle
+      status={status}
+      setListening={setListening}
+      go={go}
+      busy={busy}
+      setBusy={setBusy}
+      onOpenSession={(id) => go("live", liveRecapHash(id))}
+    />
+  );
+}
+
+function LiveActive({ status, refresh, setListening, go, transcriptOpen, onToggleTranscript, busy, setBusy }) {
   const meeting = status?.meeting || {};
   const cards = meeting.cards || [];
   const turns = meeting.utterances || [];
@@ -16,22 +73,19 @@ export default function Live({ status, refresh, setListening, go, transcriptOpen
   const latency = meeting.latency;
   const sorted = useMemo(() => cards.slice().reverse(), [cards]);
   const elapsed = useListenClock(listening, listeningSince(status));
-  const [busy, setBusy] = useState(false);
   const destination = useNoteDestination(status);
-  const [notes, setNotes] = useState({}); // card id -> { state: "saving" | "doc" | "local" | "error", hint?, url?, label? }
+  const [notes, setNotes] = useState({});
 
   async function act(id, action) {
     await post(`/api/cards/${id}/action`, { action });
     refresh();
   }
 
-  // User-clicked only: appends "who: what (due)" to this meeting's doc or page in the chosen destination.
   async function noteIt(card) {
     const { dest, label } = destination;
     setNotes((cur) => ({ ...cur, [card.id]: { state: "saving" } }));
     try {
       if (isPageDest(dest)) {
-        // Existing page: read it, show what would be added, and write only after Confirm.
         const preview = await previewNotePage(dest, { kind: "commitment", card_id: card.id });
         setNotes((cur) => ({ ...cur, [card.id]: { state: "preview", preview, label: preview.page?.title } }));
         return;
@@ -76,6 +130,7 @@ export default function Live({ status, refresh, setListening, go, transcriptOpen
     }
     return null;
   }
+
   async function toggleListen() {
     setBusy(true);
     try {

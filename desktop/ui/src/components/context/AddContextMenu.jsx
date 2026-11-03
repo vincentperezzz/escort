@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { CaretDown, FileArrowUp, FolderSimple, GoogleDriveLogo, NotionLogo, NotePencil, Plus } from "@phosphor-icons/react";
+import { CaretDown, FileArrowUp, FolderSimple, NotePencil, Plus } from "@phosphor-icons/react";
+import { GoogleLogo, NotionLogo } from "../BrandIcons.jsx";
 import { Button } from "../ui.jsx";
 
 const OPTIONS = [
-  { id: "notion", label: "Notion", Icon: NotionLogo },
-  { id: "google", label: "Google", Icon: GoogleDriveLogo },
+  { id: "notion", label: "Notion", Logo: NotionLogo },
+  { id: "google", label: "Google", Logo: GoogleLogo },
   { id: "folder", label: "Local folder sync", Icon: FolderSimple },
   { id: "upload", label: "Upload files", Icon: FileArrowUp },
   { id: "note", label: "Paste note", Icon: NotePencil },
@@ -49,7 +50,7 @@ export default function AddContextMenu({ onPick, onUploadFiles }) {
           role="menu"
           className="absolute right-0 top-[calc(100%+8px)] z-20 min-w-[220px] rounded-2xl bg-[#14151c] p-1.5 shadow-xl hairline-strong"
         >
-          {OPTIONS.map(({ id, label, Icon }) => (
+          {OPTIONS.map(({ id, label, Logo, Icon }) => (
             <li key={id} role="none">
               <button
                 type="button"
@@ -57,7 +58,13 @@ export default function AddContextMenu({ onPick, onUploadFiles }) {
                 className="press flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm hover:bg-white/[0.06]"
                 onClick={() => choose(id)}
               >
-                <Icon size={18} className="shrink-0 text-[#c6bfff]" aria-hidden />
+                {Logo ? (
+                  <span className="grid h-[18px] w-[18px] shrink-0 place-items-center" aria-hidden>
+                    <Logo size={16} />
+                  </span>
+                ) : (
+                  <Icon size={18} className="shrink-0 text-[#c6bfff]" aria-hidden />
+                )}
                 {label}
               </button>
             </li>

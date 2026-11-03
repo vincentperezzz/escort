@@ -129,6 +129,8 @@ class DesktopRuntime:
         self._notion_plans: dict[str, dict[str, Any]] = {}  # confirmation previews waiting for Confirm / Cancel
         # One Google Doc per meeting; a new id when a new listening session starts or the meeting is deleted.
         self.meeting_id = new_id("mtg")
+        self._pending_session: dict[str, Any] | None = None
+        self._listen_project_id: str | None = None
         from escort.context.project import ProjectManager
         from escort.context.sources.registry import CalendarSource
 
@@ -283,9 +285,18 @@ class DesktopRuntime:
             "notes_drive": self.notes_drive_status(),
             "notes": self.notes_status(),
             "overlay": self.overlay_status(),
+            "sessions": self._status_sessions(active_project),
             "mcp":"http://127.0.0.1:8747/mcp",
             "whatsapp": "http://127.0.0.1:8748/webhook",
         }
+
+    def _status_sessions(self, active_project: Any | None) -> list[dict[str, Any]]:
+        if active_project is None:
+            return []
+        try:
+            return self.projects.list_sessions(active_project.id)[:12]
+        except KeyError:
+            return []
 
     def save_setup(self, body: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -353,18 +364,71 @@ class DesktopRuntime:
 
     def update_project(self, project_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            self.projects.update_project(project_id, updates)
+            proj = self.projects.update_project(project_id, updates)
             if updates.get("folder_path"):
                 self.projects.sync_local_folder(project_id, self.context)
                 self.context.apply_to_store(self.store)
-        return self.public_status()
+        return {"project": proj.to_dict()}
 
     def delete_project(self, project_id: str) -> dict[str, Any]:
         with self._lock:
-            self.projects.delete_project(project_id)
+            deleted = self.projects.delete_project_cascade(project_id)
+            if deleted is None:
+                raise KeyError(f"Project not found: {project_id}")
+            self._clear_project_destinations(project_id)
             self.context.switch_root(self.projects.get_active_project_dir())
             self.context.apply_to_store(self.store)
-        return self.public_status()
+        return {"ok": True, "deleted": deleted}
+
+    def _clear_project_destinations(self, project_id: str) -> None:
+        scoped = self.prefs.get("project_destinations")
+        if isinstance(scoped, dict) and project_id in scoped:
+            scoped = dict(scoped)
+            scoped.pop(project_id, None)
+            self.prefs["project_destinations"] = scoped
+            self._write_prefs()
+
+    def _remember_project_destinations(self) -> None:
+        active = self.projects.get_active_project()
+        if active is None:
+            return
+        scoped = dict(self.prefs.get("project_destinations") or {})
+        scoped[active.id] = {
+            "notes_destination": self.prefs.get("notes_destination"),
+            "notion_notes_parent": self.notion_notes.state.parent(),
+            "notion_notes_targets": self.notion_notes.state.targets(),
+            "google_notes_folder_id": self.notes.state.folder_id(),
+            "google_notes_docs": self.notes.state.docs(),
+            "notion_save_notes": self.prefs.get("notion_save_notes"),
+            "google_save_notes": self.prefs.get("google_save_notes"),
+        }
+        self.prefs["project_destinations"] = scoped
+        self._write_prefs()
+
+    def list_sessions(self, project_id: str | None) -> dict[str, Any]:
+        with self._lock:
+            pid = project_id or self.projects.active_id
+            if not pid:
+                return {"sessions": []}
+            self.projects.require_project(pid)
+            rows = self.projects.list_sessions(pid)
+        return {"sessions": rows}
+
+    def session_recap(self, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            for proj in self.projects.list_projects():
+                payload = self.projects.session_store(proj.id).recap_payload(session_id)
+                if payload is not None:
+                    return payload
+        raise KeyError(f"Session not found: {session_id}")
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            for proj in self.projects.list_projects():
+                store = self.projects.session_store(proj.id)
+                if store.delete(session_id):
+                    return {"ok": True}
+        raise KeyError(f"Session not found: {session_id}")
 
     def clear_chat(self) -> dict[str, Any]:
         with self._lock:
@@ -641,6 +705,7 @@ class DesktopRuntime:
             if parent_id:
                 self.prefs["notion_needs_capabilities"] = False
                 self.notion_notes.state.set_parent(parent_id, parent_title)
+            self._remember_project_destinations()
             self._write_prefs()
         self._notify()
         return self.connectors.status()
@@ -903,10 +968,21 @@ class DesktopRuntime:
             if on and not was:
                 self.meeting_id = new_id("mtg")
                 self.listening_started_at = utc_now()
+                active = self.projects.get_active_project()
+                self._listen_project_id = active.id if active else None
+                self._pending_session = None
                 self._summary_gen += 1
                 self.summary = empty_summary()
                 self._start_capture()
             elif not on and was:
+                ended = utc_now()
+                started = self.listening_started_at or self.store.started_at
+                self._pending_session = {
+                    "project_id": self._listen_project_id,
+                    "started_at": started,
+                    "ended_at": ended,
+                    "title": self.meeting_title(),
+                }
                 self.listening_started_at = None
                 self._begin_summary(stop_session=self.live)
         self._set_overlay_visible(on, bring_main=not on)
@@ -959,6 +1035,7 @@ class DesktopRuntime:
             self.listening_started_at = None
             self._summary_gen += 1
             self.summary = empty_summary()
+            self._pending_session = None
             self._stop_capture(timeout=2.0)
             self.live = None
             self.meeting_id = new_id("mtg")
@@ -1017,8 +1094,22 @@ class DesktopRuntime:
                 result = {**empty_summary("error"), "error": str(inner), "generated_at": utc_now()}
         with self._lock:
             if generation != self._summary_gen:
-                return  # deleted or restarted meanwhile
+                return
             self.summary = result
+            pending = self._pending_session
+            if pending and pending.get("project_id") and result.get("status") in {"ready", "error"}:
+                try:
+                    self.projects.session_store(str(pending["project_id"])).save(
+                        project_id=str(pending["project_id"]),
+                        title=str(pending.get("title") or self.store.title or "Session"),
+                        started_at=str(pending.get("started_at") or utc_now()),
+                        ended_at=str(pending.get("ended_at") or utc_now()),
+                        summary=result,
+                        snapshot=snapshot,
+                    )
+                except Exception as exc:
+                    log.warning("Could not persist session recap: %s", exc)
+                self._pending_session = None
         self._notify()
 
     # --- overlay -------------------------------------------------------------

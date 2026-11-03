@@ -7,7 +7,7 @@ import {
   MagnifyingGlass,
   ShieldCheck,
 } from "@phosphor-icons/react";
-import { BrandTile, GoogleMark, NotionMark } from "./BrandMark.jsx";
+import { BrandTile, GoogleLogo, NotionLogo } from "./BrandIcons.jsx";
 import { Button, Pill, Toggle } from "./ui.jsx";
 import { post } from "../lib/api.js";
 import { useConnectors } from "../lib/useConnectors.js";
@@ -16,7 +16,7 @@ const META = {
   google: {
     name: "Google",
     scope: "Calendar + Docs, Sheets, Slides, Drive picks",
-    Mark: GoogleMark,
+    Mark: GoogleLogo,
     blurb: "Connect your own account. Reads your upcoming calls, the Google links you paste, and the Drive files you pick.",
     // Shown until Google app credentials are saved.
     setupSteps: [
@@ -36,7 +36,7 @@ const META = {
   notion: {
     name: "Notion",
     scope: "The pages you choose",
-    Mark: NotionMark,
+    Mark: NotionLogo,
     blurb: "Connect your own workspace. Escort reads, and when you ask, updates only the pages you pick.",
     steps: [
       "Press Connect Notion. Notion opens in your browser.",
@@ -50,32 +50,36 @@ const META = {
  * Connect accounts: Google and Notion cards with connect, connected and
  * walkthrough states. `compact` hides the intro for use inside other screens.
  */
-export default function ConnectAccounts({ onChange, compact = false }) {
+export default function ConnectAccounts({ onChange, compact = false, providers: providerFilter = null }) {
   const c = useConnectors({ onChange });
-  const list = (c.providers || []).filter((p) => META[p.id]);
+  const allowed = providerFilter?.length ? new Set(providerFilter) : null;
+  const list = (c.providers || []).filter((p) => META[p.id] && (!allowed || allowed.has(p.id)));
+  const skeletonCount = allowed ? allowed.size : 2;
+  const gridCols = list.length > 1 || skeletonCount > 1 ? "md:grid-cols-2" : "grid-cols-1";
 
   return (
-    <section aria-labelledby="connect-heading">
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h3 id="connect-heading" className="text-[17px] font-medium tracking-[-0.015em]">
-            Connect accounts
-          </h3>
-          {compact ? null : (
-            <p className="mt-1 text-sm text-muted">Optional. Without them, Escort runs on clearly labelled demo data.</p>
-          )}
+    <section aria-labelledby={compact && allowed?.size === 1 ? undefined : "connect-heading"}>
+      {compact && allowed?.size === 1 ? null : (
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h3 id="connect-heading" className="text-[17px] font-medium tracking-[-0.015em]">
+              Connect accounts
+            </h3>
+            {compact ? null : (
+              <p className="mt-1 text-sm text-muted">Optional. Without them, Escort runs on clearly labelled demo data.</p>
+            )}
+          </div>
+          {c.unavailable ? <Pill tone="warn">Backend not reachable</Pill> : null}
         </div>
-        {c.unavailable ? <Pill tone="warn">Backend not reachable</Pill> : null}
-      </div>
+      )}
       {c.providers === null ? (
-        <div className="grid gap-3 md:grid-cols-2" aria-busy="true">
-          {[0, 1].map((i) => (
+        <div className={`grid gap-3 ${gridCols}`} aria-busy="true">
+          {Array.from({ length: skeletonCount }, (_, i) => (
             <div key={i} className="h-44 rounded-[22px] bg-white/[0.025] hairline" />
           ))}
         </div>
       ) : (
-        // Equal cells: both cards stretch to the taller one; each card pins its actions to the bottom.
-        <div className="grid items-stretch gap-3 md:grid-cols-2">
+        <div className={`grid items-stretch gap-3 ${gridCols}`}>
           {list.map((p) => (
             <ProviderCard key={p.id} provider={p} ctl={c} />
           ))}
@@ -185,7 +189,7 @@ function ProviderCard({ provider, ctl }) {
         ) : isGoogle ? (
           <>
             <Button variant="primary" disabled={Boolean(busy) || needsCredentials} onClick={ctl.connectGoogle}>
-              <GoogleMark size={16} />
+              <GoogleLogo size={16} />
               {busy === "connecting" ? "Opening browser…" : busy === "waiting" ? "Waiting for Google…" : "Connect Google"}
             </Button>
             {busy === "waiting" ? (
@@ -204,7 +208,7 @@ function ProviderCard({ provider, ctl }) {
         ) : (
           <>
             <Button variant="primary" disabled={busy === "connecting"} onClick={ctl.connectNotionOAuth}>
-              <NotionMark size={16} />
+              <NotionLogo size={16} />
               {busy === "connecting"
                 ? "Opening Notion…"
                 : busy === "waiting"

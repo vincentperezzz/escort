@@ -1,15 +1,5 @@
-import {
-  File,
-  FileText,
-  FolderSimple,
-  GoogleDriveLogo,
-  Note,
-  NotionLogo,
-  PresentationChart,
-  Sparkle,
-  Table,
-  UploadSimple,
-} from "@phosphor-icons/react";
+import { File, FolderSimple, Note, Sparkle, UploadSimple } from "@phosphor-icons/react";
+import { GoogleLogo, NotionLogo } from "../BrandIcons.jsx";
 import { formatEventWhen } from "../../lib/api.js";
 
 export const FILTER_CHIPS = [
@@ -51,11 +41,8 @@ export function itemFilterBucket(item) {
 
 export function itemIcon(item) {
   const kind = resolveSourceKind(item);
-  if (kind === "notion") return NotionLogo;
-  if (kind === "google_docs") return FileText;
-  if (kind === "google_sheets") return Table;
-  if (kind === "google_slides") return PresentationChart;
-  if (kind.startsWith("google_")) return GoogleDriveLogo;
+  if (kind === "notion") return { type: "brand", Logo: NotionLogo };
+  if (kind.startsWith("google_")) return { type: "brand", Logo: GoogleLogo };
   if (kind === "local_file") return FolderSimple;
   if (kind === "paste" || kind === "notes") return Note;
   if (itemFilterBucket(item) === "artifacts") return Sparkle;

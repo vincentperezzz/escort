@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Folder } from "@phosphor-icons/react";
 import Logo from "../Logo.jsx";
 import { Button } from "../ui.jsx";
 import { post } from "../../lib/api.js";
@@ -44,10 +43,7 @@ export default function FirstProjectOnboarding({ refresh, go }) {
       <div className="ambient" aria-hidden />
       <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-6 py-12">
         <Logo size={52} />
-        <div className="mt-8 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-          <Folder size={24} weight="fill" aria-hidden />
-        </div>
-        <h1 className="mt-5 max-w-md text-center text-[32px] font-semibold leading-tight tracking-[-0.035em] text-balance sm:text-[36px]">
+        <h1 className="mt-8 max-w-md text-center text-[32px] font-semibold leading-tight tracking-[-0.035em] text-balance sm:text-[36px]">
           Create your first project
         </h1>
         <p className="mt-3 max-w-md text-center text-[15px] leading-relaxed text-muted text-pretty">

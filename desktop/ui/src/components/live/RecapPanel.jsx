@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { ArrowsClockwise, ArrowSquareOut, Copy, Check, FileArrowUp, Sparkle } from "@phosphor-icons/react";
-import { Bezel, Button, Empty, PageHeader, Pill } from "../components/ui.jsx";
-import { Bubble } from "./Live.jsx";
-import { post } from "../lib/api.js";
-import { KIND } from "../lib/cards.js";
-import NoteDestination, { UpdatePreview } from "../components/NoteDestination.jsx";
-import { cancelNotePage, confirmNotePage, isPageDest, noteHint, previewNotePage, saveNote, useNoteDestination } from "../lib/notes.js";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowsClockwise, ArrowLeft, ArrowSquareOut, Copy, Check, FileArrowUp, Play, Sparkle } from "@phosphor-icons/react";
+import { Bezel, Button, Empty, Pill } from "../ui.jsx";
+import { Bubble } from "../../screens/Live.jsx";
+import { api, post } from "../../lib/api.js";
+import { KIND } from "../../lib/cards.js";
+import NoteDestination, { UpdatePreview } from "../NoteDestination.jsx";
+import { cancelNotePage, confirmNotePage, isPageDest, noteHint, previewNotePage, saveNote, useNoteDestination } from "../../lib/notes.js";
+import { liveRecapHash } from "./parseLiveRoute.js";
 
 const TABS = [
   { id: "summary", label: "Summary" },
@@ -13,35 +14,137 @@ const TABS = [
   { id: "cards", label: "Cards" },
 ];
 
-export default function Recap({ status, refresh, tab, go }) {
-  const meeting = status?.meeting || {};
-  const summary = status?.summary || { status: "idle" };
+function transcriptToTurns(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row, i) => ({
+    id: row.id || `t-${i}`,
+    speaker: row.speaker || "Them",
+    text: row.text || "",
+  }));
+}
+
+export default function RecapPanel({ status, refresh, sessionId, tab, go, onBack, showStartAnother, onStartAnother }) {
+  const [fetched, setFetched] = useState(null);
+  const [fetchState, setFetchState] = useState(sessionId ? "loading" : "idle");
+
+  useEffect(() => {
+    if (!sessionId) {
+      setFetched(null);
+      setFetchState("idle");
+      return undefined;
+    }
+    let alive = true;
+    setFetchState("loading");
+    api(`/api/sessions/${encodeURIComponent(sessionId)}/recap`)
+      .then((d) => {
+        if (alive) {
+          setFetched(d);
+          setFetchState("ready");
+        }
+      })
+      .catch((err) => {
+        if (alive) {
+          setFetched(null);
+          setFetchState(err.status === 404 ? "missing" : "error");
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
+
+  const meeting = useMemo(() => {
+    if (sessionId && fetched) {
+      const turns = transcriptToTurns(fetched.transcript);
+      return {
+        title: fetched.title,
+        utterances: turns,
+        open_items: fetched.open_items || [],
+        commitments: fetched.commitments || fetched.meeting?.commitments || [],
+        cards: fetched.cards || [],
+        started_at: fetched.started_at,
+        ended_at: fetched.ended_at,
+      };
+    }
+    return status?.meeting || {};
+  }, [sessionId, fetched, status?.meeting]);
+
+  const summary = useMemo(() => {
+    if (sessionId && fetched) {
+      const nested = fetched.summary;
+      if (nested && typeof nested === "object" && (nested.status || nested.bullets || nested.commitments)) return nested;
+      if (fetched.status || fetched.bullets || fetched.commitments || fetched.conflicts) {
+        return {
+          status: fetched.status || "ready",
+          title: fetched.title,
+          bullets: fetched.bullets || [],
+          commitments: fetched.commitments || [],
+          conflicts: fetched.conflicts || [],
+        };
+      }
+      if (typeof nested === "string" && nested.trim()) return { status: "ready", title: fetched.title, bullets: [nested.trim()] };
+      return { status: "idle" };
+    }
+    return status?.recap?.summary || status?.summary || { status: "idle" };
+  }, [sessionId, fetched, status?.summary, status?.recap]);
+
   const active = TABS.some((t) => t.id === tab) ? tab : summary.status && summary.status !== "idle" ? "summary" : "cards";
 
+  function setTab(next) {
+    go("live", liveRecapHash(sessionId, next));
+  }
+
+  const title = meeting.title || fetched?.title || "Recap";
+
   return (
-    <div className="mx-auto max-w-5xl">
-      <PageHeader title="Recap" lede={`${meeting.title ? `${meeting.title}. ` : ""}Your notes from the call, what people promised, and what is still open.`} />
-      <div role="tablist" aria-label="Recap views" className="glass mb-6 inline-flex rounded-full p-1">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={active === t.id}
-            onClick={() => go("recap", t.id)}
-            className={`press h-9 rounded-full px-4 text-[13px] font-medium ${
-              active === t.id ? "bg-white/[0.1] text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" : "text-muted hover:text-ink"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+    <div className="scroll-thin mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-auto px-4 pb-16 pt-8 md:px-10 md:pt-10">
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={onBack}>
+          <ArrowLeft size={15} aria-hidden /> Back
+        </Button>
+        {showStartAnother ? (
+          <Button variant="primary" size="sm" onClick={onStartAnother} trailing={<Play size={13} weight="fill" />}>
+            Start another meeting
+          </Button>
+        ) : null}
       </div>
-      {active === "summary" ? (
-        <SummaryView summary={summary} meeting={meeting} refresh={refresh} status={status} go={go} />
+
+      <div className="mb-2">
+        <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.03em]">{title}</h1>
+        <p className="mt-1 max-w-[62ch] text-[14px] leading-relaxed text-muted">Your notes from the call, what people promised, and what is still open.</p>
+      </div>
+
+      {fetchState === "loading" ? <p className="mb-6 text-[13px] text-faint">Loading recap…</p> : null}
+      {fetchState === "missing" ? (
+        <Empty title="Recap not found" body="This session may have been removed or is not available yet." />
       ) : null}
-      {active === "transcript" ? <TranscriptView turns={meeting.utterances || []} /> : null}
-      {active === "cards" ? <CardsView meeting={meeting.meeting || {}} /> : null}
+      {fetchState === "error" ? <Empty title="Could not load recap" body="Try again in a moment." /> : null}
+
+      {fetchState === "missing" || fetchState === "error" ? null : (
+        <>
+          <div role="tablist" aria-label="Recap views" className="glass mb-6 inline-flex rounded-full p-1">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active === t.id}
+                onClick={() => setTab(t.id)}
+                className={`press h-9 rounded-full px-4 text-[13px] font-medium ${
+                  active === t.id ? "bg-white/[0.1] text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]" : "text-muted hover:text-ink"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {active === "summary" ? (
+            <SummaryView summary={summary} meeting={meeting} refresh={refresh} status={status} go={go} sessionScoped={Boolean(sessionId)} />
+          ) : null}
+          {active === "transcript" ? <TranscriptView turns={meeting.utterances || []} /> : null}
+          {active === "cards" ? <CardsView meeting={meeting} /> : null}
+        </>
+      )}
     </div>
   );
 }
@@ -54,20 +157,20 @@ function summaryText(s) {
   return lines.join("\n").trim();
 }
 
-function SummaryView({ summary, meeting, refresh, status, go }) {
+function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState(null);
-  const [saved, setSaved] = useState({}); // dest -> doc, from this session's clicks
-  const [preview, setPreview] = useState(null); // an existing-page update waiting for Confirm
+  const [saved, setSaved] = useState({});
+  const [preview, setPreview] = useState(null);
   const hasTranscript = (meeting.utterances || []).length > 0;
   const destination = useNoteDestination(status);
   const { dest, label, current } = destination;
   const doc = saved[dest] || (current.summary_saved_at ? current.doc : null);
+  const canSave = !sessionScoped;
 
-  // User-clicked only. Re-saving appends a new dated section; it never overwrites.
   async function saveSummary() {
     setSaving(true);
     setSaveErr(null);
@@ -167,9 +270,11 @@ function SummaryView({ summary, meeting, refresh, status, go }) {
   if (summary.status === "error") {
     return (
       <Empty title="The summary did not finish" body="Something went wrong while writing it. Your transcript and cards are safe.">
-        <Button variant="primary" size="sm" onClick={regenerate} disabled={busy}>
-          <ArrowsClockwise size={14} aria-hidden /> Try again
-        </Button>
+        {!sessionScoped ? (
+          <Button variant="primary" size="sm" onClick={regenerate} disabled={busy}>
+            <ArrowsClockwise size={14} aria-hidden /> Try again
+          </Button>
+        ) : null}
         {err ? <p className="mt-3 text-[12.5px] text-warn">{err}</p> : null}
       </Empty>
     );
@@ -178,7 +283,7 @@ function SummaryView({ summary, meeting, refresh, status, go }) {
   if (summary.status !== "ready") {
     return (
       <Empty title="No summary yet" body="A summary is written when you stop listening. You can also write one from the current transcript.">
-        {hasTranscript ? (
+        {!sessionScoped && hasTranscript ? (
           <Button variant="primary" size="sm" onClick={regenerate} disabled={busy}>
             Write summary
           </Button>
@@ -199,18 +304,22 @@ function SummaryView({ summary, meeting, refresh, status, go }) {
           <h2 className="mt-2 text-[24px] font-semibold leading-tight tracking-[-0.03em] text-balance">{summary.title || meeting.title || "Meeting summary"}</h2>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={regenerate} disabled={busy}>
-            <ArrowsClockwise size={14} aria-hidden /> Regenerate
-          </Button>
-          <Button size="sm" onClick={saveSummary} disabled={saving}>
-            <FileArrowUp size={14} aria-hidden /> {saving ? "Saving…" : isPageDest(dest) ? "Review update" : doc ? "Save again" : `Save to ${label}`}
-          </Button>
+          {!sessionScoped ? (
+            <Button size="sm" onClick={regenerate} disabled={busy}>
+              <ArrowsClockwise size={14} aria-hidden /> Regenerate
+            </Button>
+          ) : null}
+          {canSave ? (
+            <Button size="sm" onClick={saveSummary} disabled={saving}>
+              <FileArrowUp size={14} aria-hidden /> {saving ? "Saving…" : isPageDest(dest) ? "Review update" : doc ? "Save again" : `Save to ${label}`}
+            </Button>
+          ) : null}
           <Button size="sm" variant="primary" onClick={copy}>
             {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? "Copied" : "Copy summary"}
           </Button>
         </div>
       </div>
-      <NoteDestination className="mt-4" enabled={destination.enabled} labels={destination.labels} dest={dest} onChange={destination.setDest} />
+      {canSave ? <NoteDestination className="mt-4" enabled={destination.enabled} labels={destination.labels} dest={dest} onChange={destination.setDest} /> : null}
       {preview ? <UpdatePreview className="mt-4 max-w-[60ch]" preview={preview} busy={saving} onConfirm={confirmUpdate} onCancel={cancelUpdate} /> : null}
       {doc ? (
         <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]" role="status">
@@ -226,13 +335,13 @@ function SummaryView({ summary, meeting, refresh, status, go }) {
         </div>
       ) : null}
       {saveErr ? <SaveError err={saveErr.err} dest={saveErr.dest} go={go} /> : null}
-      {!doc && !saveErr ? (
+      {!doc && !saveErr && canSave ? (
         <p className="mt-3 text-[12px] text-faint">
           {isPageDest(dest)
             ? "Adds a dated recap to the end of the page you picked. You review the change before anything is written."
             : dest === "notion"
-            ? "Notion: one page per meeting under the parent page you picked. Saving again adds a dated section."
-            : "Google Docs: one doc per meeting in your Escort folder. Saving again adds a dated section."}
+              ? "Notion: one page per meeting under the parent page you picked. Saving again adds a dated section."
+              : "Google Docs: one doc per meeting in your Escort folder. Saving again adds a dated section."}
         </p>
       ) : null}
       {err ? <p className="mt-3 text-[12.5px] text-warn">{err}</p> : null}
@@ -337,28 +446,29 @@ function TranscriptView({ turns }) {
 }
 
 function CardsView({ meeting }) {
-  const open = meeting.open_items || [];
-  const promises = meeting.commitments || [];
+  const cards = meeting.cards || [];
+  const open = meeting.open_items?.length ? meeting.open_items : cards.filter((c) => c.type && String(c.type).includes("conflict"));
+  const promises = meeting.commitments?.length ? meeting.commitments : cards.filter((c) => c.type && String(c.type).includes("commit"));
   if (open.length === 0 && promises.length === 0) {
     return <Empty title="Nothing to recap yet" body="Open items and promises collect here after cards land in Live." />;
   }
   return (
     <div className="grid gap-5 md:grid-cols-2">
       <Column kind="conflict" title="Open against your notes" count={open.length} emptyText="No open conflicts.">
-        {open.map((item) => (
-          <li key={item.id} className="rounded-2xl bg-white/[0.025] px-4 py-3.5 hairline">
-            <p className="text-[14.5px] font-medium leading-snug">{item.title}</p>
+        {open.map((item, i) => (
+          <li key={item.id || i} className="rounded-2xl bg-white/[0.025] px-4 py-3.5 hairline">
+            <p className="text-[14.5px] font-medium leading-snug">{item.title || item.what}</p>
             {item.prd_section ? <p className="mt-1.5 text-[12.5px] text-muted">{item.prd_section}</p> : null}
           </li>
         ))}
       </Column>
       <Column kind="commit" title="Commitments" count={promises.length} emptyText="No commitments captured.">
-        {promises.map((item) => (
-          <li key={item.id} className="rounded-2xl bg-white/[0.025] px-4 py-3.5 hairline">
-            <p className="text-[14.5px] font-medium leading-snug">{item.what}</p>
+        {promises.map((item, i) => (
+          <li key={item.id || i} className="rounded-2xl bg-white/[0.025] px-4 py-3.5 hairline">
+            <p className="text-[14.5px] font-medium leading-snug">{item.what || item.title}</p>
             <p className="mt-1.5 text-[12.5px] text-muted">
               <span className="text-ink">{item.who}</span>
-              {item.when ? `, ${item.when}` : ""}
+              {item.when || item.due ? `, ${item.when || item.due}` : ""}
             </p>
           </li>
         ))}

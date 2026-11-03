@@ -111,6 +111,27 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     def regenerate_summary() -> dict:
         return runtime.regenerate_summary()
 
+    @app.get("/api/sessions", response_model=None)
+    def list_sessions(project_id: str | None = None) -> dict | JSONResponse:
+        try:
+            return runtime.list_sessions(project_id)
+        except KeyError as err:
+            return JSONResponse(status_code=404, content={"error": str(err)})
+
+    @app.get("/api/sessions/{session_id}/recap", response_model=None)
+    def session_recap(session_id: str) -> dict | JSONResponse:
+        try:
+            return runtime.session_recap(session_id)
+        except KeyError as err:
+            return JSONResponse(status_code=404, content={"error": str(err)})
+
+    @app.delete("/api/sessions/{session_id}", response_model=None)
+    def delete_session(session_id: str) -> dict | JSONResponse:
+        try:
+            return runtime.delete_session(session_id)
+        except KeyError as err:
+            return JSONResponse(status_code=404, content={"error": str(err)})
+
     @app.get("/api/transcript")
     def transcript() -> dict:
         return runtime.transcript()
@@ -301,13 +322,21 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     def create_project(body: dict) -> dict:
         return runtime.create_project(body)
 
-    @app.put("/api/projects/{project_id}")
-    def update_project(project_id: str, body: dict) -> dict:
-        return runtime.update_project(project_id, body)
+    @app.put("/api/projects/{project_id}", response_model=None)
+    def update_project(project_id: str, body: dict) -> dict | JSONResponse:
+        try:
+            return runtime.update_project(project_id, body)
+        except KeyError as err:
+            return JSONResponse(status_code=404, content={"error": str(err)})
+        except ValueError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
 
-    @app.delete("/api/projects/{project_id}")
-    def delete_project(project_id: str) -> dict:
-        return runtime.delete_project(project_id)
+    @app.delete("/api/projects/{project_id}", response_model=None)
+    def delete_project(project_id: str) -> dict | JSONResponse:
+        try:
+            return runtime.delete_project(project_id)
+        except KeyError as err:
+            return JSONResponse(status_code=404, content={"error": str(err)})
 
     @app.post("/api/projects/{project_id}/activate")
     def activate_project(project_id: str) -> dict:

@@ -46,7 +46,8 @@ def test_project_crud(tmp_path: Path):
     mgr.set_active_project(proj2.id)
     assert mgr.get_active_project().id == proj2.id
 
-    assert mgr.delete_project(proj2.id) is True
+    stats = mgr.delete_project_cascade(proj2.id)
+    assert stats is not None
     assert len(mgr.list_projects()) == 0
 
 

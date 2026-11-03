@@ -15,6 +15,14 @@ from escort.context.meeting_links import (
 )
 from escort.context.meeting_matcher import match_events_with_ai
 from escort.context.models import CalendarEvent, ContextItem, Project
+from escort.context.sessions import (
+    ProjectSessionStore,
+    count_chat_messages,
+    count_context_items,
+    count_upload_files,
+    migrate_legacy_recaps,
+)
+from escort.context.sources.registry import register_folder_watch, stop_folder_watch
 from escort.store import new_id
 
 log = logging.getLogger("escort.context.project")
@@ -82,6 +90,18 @@ class ProjectManager:
             self._save_index()
         else:
             self._load_index()
+        self._migrate_legacy_recaps_if_needed()
+
+    def _migrate_legacy_recaps_if_needed(self) -> None:
+        target_id = self.active_id or DEFAULT_PROJECT_ID
+        if target_id not in self._projects and self._projects:
+            target_id = next(iter(self._projects.keys()))
+        if target_id not in self._projects:
+            return
+        try:
+            migrate_legacy_recaps(self.base_dir, self.get_project_dir(target_id), target_id)
+        except Exception as exc:
+            log.warning("Legacy recap migration skipped: %s", exc)
 
     def _load_index(self) -> None:
         try:
@@ -117,6 +137,14 @@ class ProjectManager:
 
     def get_project(self, project_id: str) -> Project | None:
         return self._projects.get(project_id)
+
+    def require_project(self, project_id: str) -> Project:
+        if ".." in project_id or "/" in project_id or "\\" in project_id:
+            raise KeyError(f"Project not found: {project_id}")
+        proj = self.get_project(project_id)
+        if proj is None:
+            raise KeyError(f"Project not found: {project_id}")
+        return proj
 
     def get_active_project(self) -> Project | None:
         if not self.active_id:
@@ -174,38 +202,75 @@ class ProjectManager:
         self._save_index()
         return proj
 
+    def _duplicate_name(self, name: str, exclude_id: str | None = None) -> bool:
+        target = name.strip().casefold()
+        for proj in self._projects.values():
+            if exclude_id and proj.id == exclude_id:
+                continue
+            if proj.name.strip().casefold() == target:
+                return True
+        return False
+
     def update_project(self, project_id: str, updates: dict[str, Any]) -> Project:
-        proj = self.get_project(project_id)
-        if proj is None:
-            raise KeyError(f"Project not found: {project_id}")
-        if "name" in updates and str(updates["name"]).strip():
-            proj.name = str(updates["name"]).strip()
+        proj = self.require_project(project_id)
+        if "name" in updates:
+            clean = str(updates["name"]).strip()
+            if not clean:
+                raise ValueError("Project name cannot be empty.")
+            if self._duplicate_name(clean, exclude_id=project_id):
+                raise ValueError("A project with that name already exists.")
+            proj.name = clean
         if "description" in updates:
-            proj.description = str(updates["description"]).strip()
-        if "folder_path" in updates and str(updates["folder_path"]).strip():
-            proj.folder_path = str(updates["folder_path"]).strip()
+            proj.description = str(updates["description"] or "").strip()
+        if "folder_path" in updates:
+            path = str(updates["folder_path"] or "").strip()
+            proj.folder_path = path
+            if path:
+                register_folder_watch(project_id, path)
+            else:
+                stop_folder_watch(project_id)
         if "auto_switch" in updates:
             proj.auto_switch = bool(updates["auto_switch"])
         proj.updated_at = time.time()
         self._save_index()
         return proj
 
+    def session_store(self, project_id: str) -> ProjectSessionStore:
+        return ProjectSessionStore(self.get_project_dir(project_id))
+
+    def list_sessions(self, project_id: str) -> list[dict[str, Any]]:
+        self.require_project(project_id)
+        return self.session_store(project_id).list_summaries()
+
     def delete_project(self, project_id: str) -> bool:
-        if project_id not in self._projects:
-            return False
+        return bool(self.delete_project_cascade(project_id))
+
+    def delete_project_cascade(self, project_id: str) -> dict[str, Any] | None:
+        if project_id not in self._projects or ".." in project_id or "/" in project_id or "\\" in project_id:
+            return None
+        proj_dir = self.projects_dir / project_id
+        files = count_upload_files(proj_dir)
+        items = count_context_items(proj_dir)
+        sessions = ProjectSessionStore(proj_dir).delete_all()
+        chat_messages = count_chat_messages(proj_dir)
+        stop_folder_watch(project_id)
         del self._projects[project_id]
         if self.active_id == project_id:
             self.active_id = next(iter(self._projects.keys()), "")
-
-        proj_dir = self.projects_dir / project_id
         if proj_dir.is_dir():
             try:
                 shutil.rmtree(proj_dir)
             except Exception as exc:
                 log.warning("Could not delete project directory %s: %s", proj_dir, exc)
-
         self._save_index()
-        return True
+        cleared: list[str] = ["sessions", "meetings", "uploads", "context", "project_destinations"]
+        return {
+            "files": files,
+            "items": items,
+            "sessions": sessions,
+            "chat_messages": chat_messages,
+            "cleared": cleared,
+        }
 
     def reset_all(self, initial_name: str = "General", description: str = "") -> Project:
         """Reset projects to a fresh single project with clean context."""
