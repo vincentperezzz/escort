@@ -113,3 +113,57 @@ class CardRecord:
         data = asdict(self)
         data.pop("crop_path", None)
         return data
+
+
+NUDGE_KINDS = (
+    "NO_MEETING",  # listening, but nothing says a call is happening (missing link, postponed?)
+    "WRONG_PROJECT",  # the screen or talk belongs to another project than the active one
+    "NOTED",  # quiet acknowledgement that a note was captured
+    "CLARIFY",  # something vague was agreed: no owner, date, number or definition
+    "QUESTION_FOR_YOU",  # someone asked Me something that is still unanswered
+    "TIME_CHECK",  # the slot is nearly over with open items left
+    "OFF_TOPIC",  # the talk drifted away from the meeting's purpose
+    "HEADS_UP",  # anything else the model judges worth a tap on the shoulder
+)
+NUDGE_PRIORITIES = ("low", "normal", "urgent")
+
+
+@dataclass
+class NudgeRecord:
+    """A proactive card: Escort speaking up on its own, with optional one-click actions.
+
+    Separate from CardRecord so the three scope-guard card types stay as they are.
+    actions: [{"id": "open_link" | "switch_project" | "ask" | "dismiss" | ..., "label": str, "value": str?}]
+    """
+
+    id: str
+    kind: str
+    priority: str
+    title: str
+    body: str
+    actions: list[dict[str, str]]
+    created_at: str
+    source: str
+    key: str
+    reason: str = ""
+    status: str = "open"  # open | dismissed | acted
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SnapshotRecord:
+    """A frame kept for the notes because it shows something text can't carry (chart, diagram, sketch)."""
+
+    id: str
+    path: str
+    url: str
+    caption: str
+    kind: str
+    captured_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data.pop("path", None)
+        return data

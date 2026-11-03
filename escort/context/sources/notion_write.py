@@ -148,10 +148,15 @@ def commitment_block(who: str, what: str, due: str | None) -> dict[str, Any]:
 
 
 def summary_children(summary: dict[str, Any], stamp: str) -> list[dict[str, Any]]:
-    """One dated recap section: heading, then Summary / Commitments / Conflicts."""
+    """One dated recap section: heading, then Summary / [Key takeaways / Decisions / Open questions] / Commitments / Conflicts."""
     out = [block("heading_2", f"Recap · {stamp}"), block("heading_3", "Summary")]
     bullets = [str(item).strip() for item in summary.get("bullets") or [] if str(item).strip()]
     out += [block("bulleted_list_item", item) for item in bullets] or [block("paragraph", "Nothing notable.")]
+    for key, heading in (("takeaways", "Key takeaways"), ("decisions", "Decisions"), ("open_questions", "Open questions")):
+        items = [str(item).strip() for item in summary.get(key) or [] if str(item).strip()]
+        if items:
+            out.append(block("heading_3", heading))
+            out += [block("bulleted_list_item", item) for item in items]
     out.append(block("heading_3", "Commitments"))
     commitments = [item for item in summary.get("commitments") or [] if isinstance(item, dict) and item.get("what")]
     out += [commitment_block(str(c.get("who") or ""), str(c["what"]), str(c.get("due") or "")) for c in commitments] or [

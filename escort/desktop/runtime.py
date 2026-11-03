@@ -26,6 +26,7 @@ from escort.desktop import live_capture
 from escort.desktop.devices import list_audio_devices
 from escort.desktop.overlay import DEFAULT_OPACITY, clamp_opacity
 from escort.desktop.secret_store import MemorySecretStore, SecretStore, open_secret_store
+from escort.proactive import ProactiveEngine
 from escort.replay import build_pipeline, load_scenario, run_replay
 from escort.settings import Settings, load_settings
 from escort.store import MeetingStore, new_id, utc_now
@@ -53,6 +54,7 @@ NOTE_DESTINATIONS = ("drive", "notion")
 NOTION_PLAN_TTL_S = 600.0
 IDLE_SCREEN = {"monitoring": False, "last_frame_at": None, "frames_seen": 0, "changed_frames": 0}
 MONITOR_CACHE_S = 3.0
+PROACTIVE_CONTEXT_S = 60.0  # calendar + notes for the proactive engine are re-read at most this often
 
 log = logging.getLogger("escort.desktop")
 
@@ -110,6 +112,8 @@ class DesktopRuntime:
         self.main_window: MainWindowController | None = None
         self._main_hidden = False
         self.live: live_capture.LiveSession | None = None
+        self.proactive: ProactiveEngine | None = None
+        self._proactive_ctx: tuple[float, dict[str, Any]] | None = None
         self.summary: dict[str, Any] = empty_summary()
         self._summary_gen = 0
         self._summary_thread: threading.Thread | None = None
@@ -323,6 +327,13 @@ class DesktopRuntime:
             self.projects.set_active_project(project_id)
             self.context.switch_root(self.projects.get_active_project_dir())
             self.context.apply_to_store(self.store)
+            if self.listening:
+                # Switched mid-call: the recap is filed under the new project, and the card brain reads its notes.
+                self._listen_project_id = project_id
+                self._proactive_ctx = None
+                pipeline = getattr(self.live, "pipeline", None)
+                if pipeline is not None:
+                    pipeline.prd_text = self.context.combined_markdown()
         return self.public_status()
 
     def create_project(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -424,6 +435,17 @@ class DesktopRuntime:
                 if payload is not None:
                     return payload
         raise KeyError(f"Session not found: {session_id}")
+
+    def session_media(self, session_id: str, name: str) -> Path | None:
+        with self._lock:
+            for proj in self.projects.list_projects():
+                try:
+                    found = self.projects.session_store(proj.id).resolve_media(session_id, name)
+                except KeyError:
+                    return None
+                if found is not None:
+                    return found
+        return None
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
         with self._lock:
@@ -977,6 +999,7 @@ class DesktopRuntime:
                 self._summary_gen += 1
                 self.summary = empty_summary()
                 self._start_capture()
+                self._start_proactive()
             elif not on and was:
                 ended = utc_now()
                 started = self.listening_started_at or self.store.started_at
@@ -987,6 +1010,7 @@ class DesktopRuntime:
                     "title": self.meeting_title(),
                 }
                 self.listening_started_at = None
+                self._stop_proactive()
                 self._begin_summary(stop_session=self.live)
         self._set_overlay_visible(on, bring_main=not on)
         self._notify()
@@ -1020,6 +1044,115 @@ class DesktopRuntime:
             except Exception as exc:
                 log.warning("Live capture did not stop cleanly: %s", exc)
 
+    # --- proactive nudges ----------------------------------------------------------
+
+    def _start_proactive(self) -> None:
+        """Never raises: a failed engine only means no nudges."""
+        self._proactive_ctx = None
+        try:
+            self.proactive = ProactiveEngine(
+                self.store,
+                self._settings(),
+                self._proactive_context,
+                gate_fn=lambda: getattr(getattr(self.live, "pipeline", None), "gate", None),
+                on_nudge=self._on_nudge,
+            ).start()
+        except Exception as exc:
+            log.warning("Proactive engine did not start: %s", exc)
+            self.proactive = None
+
+    def _stop_proactive(self) -> None:
+        engine, self.proactive = self.proactive, None
+        if engine is not None:
+            try:
+                engine.stop(timeout=1.0)
+            except Exception as exc:
+                log.warning("Proactive engine did not stop cleanly: %s", exc)
+
+    def _proactive_context(self) -> dict[str, Any]:
+        """Project, other projects, the slot happening now (with its join link) and the notes. Cached."""
+        cached = self._proactive_ctx
+        if cached and time.monotonic() - cached[0] < PROACTIVE_CONTEXT_S:
+            ctx = dict(cached[1])
+        else:
+            ctx = {"event": self._current_event(), "notes": self.context.combined_markdown()}
+            self._proactive_ctx = (time.monotonic(), ctx)
+        active = self.projects.get_active_project()
+
+        def brief(project: Any) -> dict[str, str]:
+            return {"id": project.id, "name": project.name, "description": (project.description or "")[:300]}
+
+        ctx["project"] = brief(active) if active else None
+        ctx["other_projects"] = [brief(p) for p in self.projects.list_projects() if not active or p.id != active.id]
+        return ctx
+
+    def _current_event(self) -> dict[str, Any] | None:
+        """The calendar slot under way (or starting within 10 min): the active project's first, then any."""
+        from datetime import datetime, timedelta, timezone
+
+        from escort.proactive import _parse_time
+
+        try:
+            events = self._synced_calendar_events(25)
+        except Exception:
+            return None
+        now = datetime.now(timezone.utc)
+
+        def live(event: Any) -> bool:
+            start, end = _parse_time(event.start), _parse_time(event.end)
+            return bool(start and end and start - timedelta(minutes=10) <= now <= end)
+
+        scoped = [e for e in self.projects.active_upcoming_meetings(events) if live(e)]
+        current = scoped or [e for e in events if live(e)]
+        if not current:
+            return None
+        event = current[0]
+        return {
+            "title": event.title,
+            "start": event.start,
+            "end": event.end,
+            "meeting_url": getattr(event, "meeting_url", ""),
+            "attendees": list(event.attendees)[:12],
+        }
+
+    def _on_nudge(self, nudge: Any) -> None:
+        """A normal or urgent nudge opens the overlay, even when it was collapsed to the pill."""
+        if nudge.priority != "low" and self.listening:
+            self.set_overlay(visible=True, collapsed=False)
+        else:
+            self._notify()
+
+    def nudge_action(self, nudge_id: str, action: str) -> dict[str, Any]:
+        """Carry out a nudge button. Values come from the stored nudge, never from the request."""
+        nudge = self.store.nudge(nudge_id)
+        if nudge is None:
+            return {"ok": False, "error": "unknown nudge", "status": self.public_status()}
+        spec = next((item for item in nudge.actions if item.get("id") == action), None)
+        if action not in {"dismiss", "snooze"} and spec is None:
+            return {"ok": False, "error": "that action is not on this nudge", "status": self.public_status()}
+        result: dict[str, Any] = {"ok": True, "action": action}
+        if action in {"dismiss", "snooze"}:
+            self.store.set_nudge_status(nudge_id, "dismissed")
+            if self.proactive is not None:
+                self.proactive.note_dismissed(nudge)
+        elif action == "open_link":
+            import webbrowser
+
+            url = str(spec.get("value") or "")
+            if url.startswith("https://"):
+                webbrowser.open(url)
+            self.store.set_nudge_status(nudge_id, "acted")
+        elif action == "switch_project":
+            self.set_active_project(str(spec.get("value") or ""))
+            self._proactive_ctx = None
+            self.store.set_nudge_status(nudge_id, "acted")
+        elif action == "ask":
+            result["ask"] = str(spec.get("value") or "")
+            self.store.set_nudge_status(nudge_id, "acted")
+        self._notify()
+        result["status"] = self.public_status()
+        return result
+
     def shutdown(self) -> None:
         """App exit: stop capture threads (they are daemons, but release devices first)."""
         self.listening = False
@@ -1030,6 +1163,7 @@ class DesktopRuntime:
                 process.stop()
             except Exception as exc:
                 log.warning("Overlay process did not stop cleanly: %s", exc)
+        self._stop_proactive()
         self._stop_capture(timeout=2.0)
 
     def delete_meeting(self) -> dict[str, Any]:
@@ -1039,6 +1173,7 @@ class DesktopRuntime:
             self._summary_gen += 1
             self.summary = empty_summary()
             self._pending_session = None
+            self._stop_proactive()
             self._stop_capture(timeout=2.0)
             self.live = None
             self.meeting_id = new_id("mtg")
@@ -1102,7 +1237,12 @@ class DesktopRuntime:
             pending = self._pending_session
             if pending and pending.get("project_id") and result.get("status") in {"ready", "error"}:
                 try:
-                    self.projects.session_store(str(pending["project_id"])).save(
+                    sessions = self.projects.session_store(str(pending["project_id"]))
+                    session_id = new_id("sess")
+                    if snapshot.get("snapshots"):
+                        snapshot = {**snapshot, "snapshots": sessions.keep_visuals(session_id, snapshot["snapshots"], self.store.media_dir)}
+                    sessions.save(
+                        session_id=session_id,
                         project_id=str(pending["project_id"]),
                         title=str(pending.get("title") or self.store.title or "Session"),
                         started_at=str(pending.get("started_at") or utc_now()),

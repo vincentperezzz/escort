@@ -62,6 +62,7 @@ export default function RecapPanel({ status, refresh, sessionId, tab, go, onBack
         open_items: fetched.open_items || [],
         commitments: fetched.commitments || fetched.meeting?.commitments || [],
         cards: fetched.cards || [],
+        snapshots: fetched.snapshots || [],
         started_at: fetched.started_at,
         ended_at: fetched.ended_at,
       };
@@ -149,12 +150,36 @@ export default function RecapPanel({ status, refresh, sessionId, tab, go, onBack
   );
 }
 
-function summaryText(s) {
+const EXTRA_SECTIONS = [
+  ["takeaways", "Key takeaways"],
+  ["decisions", "Decisions"],
+  ["open_questions", "Open questions"],
+];
+
+function summaryText(s, visuals = []) {
   const lines = [s.title || "Meeting summary", ""];
-  if (s.bullets?.length) lines.push("Context", ...s.bullets.map((b) => `- ${b}`), "");
+  if (s.bullets?.length) lines.push("Highlights", ...s.bullets.map((b) => `- ${b}`), "");
+  for (const [key, title] of EXTRA_SECTIONS) {
+    if (s[key]?.length) lines.push(title, ...s[key].map((b) => `- ${b}`), "");
+  }
   if (s.commitments?.length) lines.push("Commitments", ...s.commitments.map((c) => `- ${c.who}: ${c.what}${c.due ? ` (${c.due})` : ""}`), "");
-  if (s.conflicts?.length) lines.push("Conflicts", ...s.conflicts.map((c) => `- ${c.title}${c.section ? ` (${c.section})` : ""}`));
+  if (s.conflicts?.length) lines.push("Conflicts", ...s.conflicts.map((c) => `- ${c.title}${c.section ? ` (${c.section})` : ""}`), "");
+  const captioned = visuals.filter((v) => v.caption);
+  if (captioned.length) lines.push("Visuals", ...captioned.map((v) => `- ${v.caption}`));
   return lines.join("\n").trim();
+}
+
+function BulletList({ items }) {
+  return (
+    <ul className="space-y-2.5">
+      {items.map((b, i) => (
+        <li key={i} className="flex gap-3 text-[14.5px] leading-relaxed text-ink/85">
+          <span className="mt-[9px] h-1 w-1 shrink-0 rounded-full bg-faint" aria-hidden />
+          <span className="max-w-[68ch]">{b}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
@@ -224,7 +249,7 @@ function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
   }
 
   async function copy() {
-    const text = summaryText(summary);
+    const text = summaryText(summary, meeting.snapshots || []);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -252,7 +277,7 @@ function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
           </span>
           <div>
             <h2 className="text-[18px] font-medium tracking-[-0.02em]">Writing your summary…</h2>
-            <p className="mt-0.5 text-[13px] text-muted">Pulling out context, promises and conflicts. This takes a few seconds.</p>
+            <p className="mt-0.5 text-[13px] text-muted">Pulling out highlights, decisions and promises. This takes a few seconds.</p>
           </div>
         </div>
         <div className="mt-8 space-y-3" aria-hidden>
@@ -296,6 +321,7 @@ function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
   const bullets = summary.bullets || [];
   const commitments = summary.commitments || [];
   const conflicts = summary.conflicts || [];
+  const visuals = (meeting.snapshots || []).filter((v) => v && v.url);
   return (
     <Bezel className="rise" coreClassName="p-7 md:p-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -346,20 +372,43 @@ function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
       ) : null}
       {err ? <p className="mt-3 text-[12.5px] text-warn">{err}</p> : null}
 
-      <Section title="Context">
-        {bullets.length ? (
-          <ul className="space-y-2.5">
-            {bullets.map((b, i) => (
-              <li key={i} className="flex gap-3 text-[14.5px] leading-relaxed text-ink/85">
-                <span className="mt-[9px] h-1 w-1 shrink-0 rounded-full bg-faint" aria-hidden />
-                <span className="max-w-[68ch]">{b}</span>
+      <Section title="Highlights" count={bullets.length > 1 ? bullets.length : 0}>
+        {bullets.length ? <BulletList items={bullets} /> : <p className="text-sm text-muted">Nothing notable.</p>}
+      </Section>
+
+      {EXTRA_SECTIONS.map(([key, title]) =>
+        summary[key]?.length ? (
+          <Section key={key} title={title}>
+            <BulletList items={summary[key]} />
+          </Section>
+        ) : null,
+      )}
+
+      {visuals.length ? (
+        <Section title="Visuals" count={visuals.length}>
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            {visuals.map((v, i) => (
+              <li key={v.id || i}>
+                <a
+                  href={v.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="press group block overflow-hidden rounded-2xl bg-white/[0.025] hairline"
+                  title="Open full size"
+                >
+                  <img
+                    src={v.url}
+                    alt={v.caption || v.kind || "Meeting visual"}
+                    loading="lazy"
+                    className="aspect-video w-full object-cover transition-opacity group-hover:opacity-90"
+                  />
+                  {v.caption ? <p className="px-3 py-2.5 text-[12.5px] leading-snug text-ink/80">{v.caption}</p> : null}
+                </a>
               </li>
             ))}
           </ul>
-        ) : (
-          <p className="text-sm text-muted">Nothing notable.</p>
-        )}
-      </Section>
+        </Section>
+      ) : null}
 
       <Section title="Commitments" kind="commit" count={commitments.length}>
         {commitments.length ? (

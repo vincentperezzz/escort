@@ -64,6 +64,7 @@ class CalendarEvent:
     attendees: list[str] = field(default_factory=list)
     linked_doc_hints: list[str] = field(default_factory=list)
     mock: bool = False
+    meeting_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

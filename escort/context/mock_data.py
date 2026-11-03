@@ -22,6 +22,7 @@ def mock_calendar() -> list[CalendarEvent]:
             attendees=["boss@example.com", "client@bayanipay.demo"],
             linked_doc_hints=["SOW", "bayanipay", "Phase 2"],
             mock=True,
+            meeting_url="https://meet.google.com/bay-anip-ayx",
         ),
         CalendarEvent(
             id="evt_weekly_sync",

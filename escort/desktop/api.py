@@ -125,6 +125,13 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
         except KeyError as err:
             return JSONResponse(status_code=404, content={"error": str(err)})
 
+    @app.get("/api/sessions/{session_id}/media/{name}", response_model=None)
+    def session_media(session_id: str, name: str) -> FileResponse | JSONResponse:
+        path = runtime.session_media(session_id, name)
+        if path is None:
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        return FileResponse(path)
+
     @app.delete("/api/sessions/{session_id}", response_model=None)
     def delete_session(session_id: str) -> dict | JSONResponse:
         try:
@@ -139,6 +146,10 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     @app.post("/api/cards/{card_id}/action")
     def action(card_id: str, body: dict) -> dict:
         return runtime.act(card_id, str(body.get("action") or ""))
+
+    @app.post("/api/nudges/{nudge_id}/action")
+    def nudge_action(nudge_id: str, body: dict) -> dict:
+        return runtime.nudge_action(nudge_id, str(body.get("action") or ""))
 
     @app.post("/api/meeting/delete")
     def delete_meeting() -> dict:

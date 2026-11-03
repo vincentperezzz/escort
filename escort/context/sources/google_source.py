@@ -125,9 +125,31 @@ def list_calendar_events(auth: GoogleAuth, limit: int = 5, now: datetime | None 
                 description=str(raw.get("description") or ""),
                 attendees=[str(item.get("email")) for item in raw.get("attendees") or [] if item.get("email")],
                 linked_doc_hints=hints,
+                meeting_url=event_meeting_url(raw),
             )
         )
     return events[:limit]
+
+
+_MEETING_URL = re.compile(
+    r"https://(?:meet\.google\.com/[a-z0-9-]+|[\w.-]*zoom\.us/[jw]/[^\s\"'<>]+|teams\.microsoft\.com/l/meetup-join/[^\s\"'<>]+"
+    r"|teams\.live\.com/meet/[^\s\"'<>]+|[\w.-]*webex\.com/[^\s\"'<>]+)",
+    re.IGNORECASE,
+)
+
+
+def event_meeting_url(raw: dict[str, Any]) -> str:
+    """The join link of a Calendar event: Meet/conference data first, then a Zoom/Teams/Webex link in location or description."""
+    if raw.get("hangoutLink"):
+        return str(raw["hangoutLink"])
+    for entry in (raw.get("conferenceData") or {}).get("entryPoints") or []:
+        if entry.get("entryPointType") == "video" and entry.get("uri"):
+            return str(entry["uri"])
+    for text in (raw.get("location"), raw.get("description")):
+        match = _MEETING_URL.search(str(text or ""))
+        if match:
+            return match.group(0).rstrip(").,;\"'<>")
+    return ""
 
 
 # ---- Google Docs -> markdown (the same shape the Notion importer produces) ---------------------

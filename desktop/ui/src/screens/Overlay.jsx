@@ -8,6 +8,8 @@ import FormattedText from "../components/FormattedText.jsx";
 import { useOverlay } from "../lib/useOverlay.js";
 import { KIND, kindOf, CONFLICT_ACTIONS } from "../lib/cards.js";
 import { listeningSince, useListenClock } from "../lib/useListenClock.js";
+import NudgeCard from "../components/live/NudgeCard.jsx";
+import { openNudges, chime } from "../lib/nudges.js";
 
 const QUICK = [
   { id: "assist", label: "Assist", Icon: Lightning, prompt: "Assist me right now: from my notes and this call so far, what matters most in the next minute?" },
@@ -134,6 +136,9 @@ export default function Overlay() {
   const cards = useCards(meeting);
   const conflict = cards.find((c) => kindOf(c.type) === "conflict");
   const rest = cards.filter((c) => c !== conflict).slice(0, conflict ? 2 : 3);
+  const nudgeKey = JSON.stringify(meeting?.nudges || []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nudges = useMemo(() => openNudges(meeting), [nudgeKey]);
   const latency = meeting?.latency?.count ? `Median speech-to-card ${Math.round(meeting.latency.p50_ms)}ms` : "";
 
   const toggleCollapsed = useCallback(() => {
@@ -195,6 +200,41 @@ export default function Overlay() {
     }
   }, [reloadOverlay]);
 
+  const actNudge = useCallback(
+    async (nudge, action, spec) => {
+      setActing(`${nudge.id}:${action}`);
+      try {
+        const data = await post(`/api/nudges/${nudge.id}/action`, { action });
+        if (data?.ask) ask(spec?.label || "Escort AI", data.ask);
+      } catch {
+        /* the next poll shows the real state */
+      } finally {
+        setActing("");
+        refresh();
+      }
+    },
+    [ask, refresh],
+  );
+
+  // Louder: a new normal/urgent nudge opens the overlay (even from the pill), chimes, and rings.
+  const heard = useRef(null);
+  useEffect(() => {
+    const ids = nudges.loud.map((n) => n.id);
+    if (heard.current === null) {
+      heard.current = new Set(ids); // what was already open when the overlay loaded is not news
+      return;
+    }
+    const fresh = nudges.loud.filter((n) => !heard.current.has(n.id));
+    ids.forEach((id) => heard.current.add(id));
+    if (!fresh.length) return;
+    chime(fresh.some((n) => n.priority === "urgent"));
+    if (collapsed) {
+      setTuning(false);
+      bridge?.setCollapsed(false);
+      updateOverlay({ collapsed: false });
+    }
+  }, [nudges, collapsed, updateOverlay]);
+
   const closeAnswer = useCallback(() => setAnswer(null), []);
   const toggleTuning = useCallback(() => setTuning((v) => !v), []);
   const commitOpacity = useCallback((v) => updateOverlay({ opacity: v }), [updateOverlay]);
@@ -209,6 +249,7 @@ export default function Overlay() {
         title={meeting?.title || ""}
         hint={latency}
         count={cards.length}
+        ticker={collapsed ? nudges.loud[0]?.title || nudges.quiet[0]?.title || "" : ""}
         open={!collapsed}
         tuning={tuning}
         onTune={toggleTuning}
@@ -225,12 +266,18 @@ export default function Overlay() {
           <section data-hit className="ov-glass ov-panel flex min-h-0 shrink flex-col rounded-[24px]" aria-label="Escort live cards">
             <div className="ov-stack flex min-h-0 flex-col gap-2 overflow-y-auto p-2.5 pb-6">
               <ScreenChip status={status} />
+              {nudges.loud.map((n) => (
+                <NudgeCard key={n.id} nudge={n} onAct={actNudge} acting={acting} />
+              ))}
               {answer ? <Answer answer={answer} onClose={closeAnswer} /> : null}
+              {nudges.quiet.map((n) => (
+                <NudgeCard key={n.id} nudge={n} onAct={actNudge} acting={acting} />
+              ))}
               {conflict ? <ConflictCard card={conflict} onAct={act} acting={acting} /> : null}
               {rest.map((card) => (
                 <MiniCard key={card.id} card={card} />
               ))}
-              {!cards.length && !answer ? <EmptyNote offline={offline} listening={listening} /> : null}
+              {!cards.length && !answer && !nudges.loud.length && !nudges.quiet.length ? <EmptyNote offline={offline} listening={listening} /> : null}
             </div>
           </section>
           <div data-hit className="ov-glass flex shrink-0 flex-col gap-1 rounded-[24px] p-1.5">
@@ -252,7 +299,7 @@ const Clock = memo(function Clock({ listening, startedAt }) {
   );
 });
 
-const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, count, open, tuning, onTune, onToggle, onListen, onOpenApp, project }) {
+const Pill = memo(function Pill({ listening, startedAt, offline, title, ticker, hint, count, open, tuning, onTune, onToggle, onListen, onOpenApp, project }) {
   const drag = useWindowDrag();
   return (
     <div
@@ -278,7 +325,13 @@ const Pill = memo(function Pill({ listening, startedAt, offline, title, hint, co
             {project.name}
           </span>
         ) : null}
-        {title && listening ? <span className="truncate text-[12px] text-faint">{title}</span> : null}
+        {ticker ? (
+          <span key={ticker} className="rise truncate text-[12px] font-medium text-[#ffc46b]" role="status">
+            {ticker}
+          </span>
+        ) : title && listening ? (
+          <span className="truncate text-[12px] text-faint">{title}</span>
+        ) : null}
         {count ? <span className="mono shrink-0 self-center rounded-full bg-white/[0.07] px-1.5 text-[10.5px] leading-4 text-muted">{count}</span> : null}
       </div>
       {open ? (

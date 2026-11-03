@@ -47,7 +47,7 @@ def test_wer_substitution_and_exact():
     assert wer("pull payment into phase", "pull checkout into phase") == 0.25
 
 
-def test_frame_gate_skips_identical_and_keeps_a_real_change():
+def test_frame_gate_skips_identical_and_keeps_a_settled_change():
     base = Image.new("RGB", (80, 40), (20, 20, 20))
     same = base.copy()
     changed = base.copy()
@@ -56,9 +56,11 @@ def test_frame_gate_skips_identical_and_keeps_a_real_change():
     first, _ = gate.changed(base)
     second, _ = gate.changed(same)
     third, _ = gate.changed(changed)
+    fourth, _ = gate.changed(changed.copy())
     assert first is True
     assert second is False
-    assert third is True
+    assert third is False  # held as a pending candidate until the screen settles
+    assert fourth is True
     assert hamming(dhash(base), dhash(same)) == 0
 
 

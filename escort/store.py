@@ -6,14 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from escort.models import CARD_TYPES, CardRecord, FrameRecord, Utterance
+from escort.models import CARD_TYPES, NUDGE_KINDS, CardRecord, FrameRecord, NudgeRecord, SnapshotRecord, Utterance
 
 RETENTION_NOTE = (
     "One meeting lives here: PRD sections, Me and Them turns, commitments, open items, and the last changed frame. "
-    "Raw audio is not kept. Older frames are dropped as soon as a new one arrives. "
+    "Raw audio is not kept. Older frames are dropped as soon as a new one arrives, except the few kept as "
+    "visuals for the notes (charts, diagrams, sketches). "
     "delete_meeting_state throws the whole meeting away when the call is over."
 )
 LATENCY_TARGET_MS = 5000
+MAX_SNAPSHOTS = 40
 
 
 def utc_now() -> str:
@@ -61,6 +63,8 @@ class MeetingStore:
         self.utterances: list[Utterance] = []
         self.frames: list[FrameRecord] = []
         self.cards: list[CardRecord] = []
+        self.nudges: list[NudgeRecord] = []
+        self.snapshots: list[SnapshotRecord] = []
         self.skipped_frames = 0
         self.warnings: list[str] = []
         self.partials: dict[str, str] = {}
@@ -158,6 +162,44 @@ class MeetingStore:
             self.cards.append(card)
         return card
 
+    def add_nudge(self, nudge: NudgeRecord) -> NudgeRecord:
+        if nudge.kind not in NUDGE_KINDS:
+            raise ValueError(f"unknown nudge kind {nudge.kind}")
+        with self.lock:
+            self.nudges.append(nudge)
+            self.nudges = self.nudges[-60:]
+        return nudge
+
+    def nudge(self, nudge_id: str) -> NudgeRecord | None:
+        with self.lock:
+            return next((item for item in self.nudges if item.id == nudge_id), None)
+
+    def set_nudge_status(self, nudge_id: str, status: str) -> NudgeRecord | None:
+        with self.lock:
+            item = self.nudge(nudge_id)
+            if item is not None:
+                item.status = status
+            return item
+
+    def add_snapshot(self, image: Any, *, caption: str, kind: str) -> SnapshotRecord:
+        """Keep a frame for the notes. Oldest visuals go first past MAX_SNAPSHOTS."""
+        path = self.save_png(image, "visual")
+        record = SnapshotRecord(
+            id=new_id("vis"),
+            path=str(path),
+            url=f"/panel/media/{path.name}",
+            caption=caption.strip(),
+            kind=kind,
+            captured_at=utc_now(),
+        )
+        with self.lock:
+            self.snapshots.append(record)
+            dropped = self.snapshots[:-MAX_SNAPSHOTS]
+            self.snapshots = self.snapshots[-MAX_SNAPSHOTS:]
+        for item in dropped:
+            self._unlink(Path(item.path))
+        return record
+
     def meeting(self) -> dict[str, Any]:
         with self.lock:
             commitments = []
@@ -197,9 +239,12 @@ class MeetingStore:
         with self.lock:
             paths = [Path(frame.path) for frame in self.frames]
             paths.extend(Path(card.crop_path) for card in self.cards if card.crop_path)
+            paths.extend(Path(item.path) for item in self.snapshots)
             self.utterances.clear()
             self.frames.clear()
             self.cards.clear()
+            self.nudges.clear()
+            self.snapshots.clear()
             self.partials.clear()
             self.warnings.clear()
             self.skipped_frames = 0
@@ -251,6 +296,8 @@ class MeetingStore:
                 "utterances": [item.to_dict() for item in self.utterances],
                 "partials": dict(self.partials),
                 "cards": [item.to_dict() for item in self.cards],
+                "nudges": [item.to_dict() for item in self.nudges],
+                "snapshots": [item.to_dict() for item in self.snapshots],
                 "frames": [item.to_dict() for item in self.frames],
                 "skipped_frames": self.skipped_frames,
                 "warnings": list(self.warnings),

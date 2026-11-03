@@ -4,9 +4,13 @@ The screen loop samples one display about once a second. Which display comes fro
 `monitor_source` (re-read every tick, so a change in Settings or chat applies live);
 on a switch the grabber is pointed at the new mss index and the change detector's
 baseline is reset, so the first frame of the new display is kept. Every grab goes
-through Pipeline.ingest_image, whose FrameGate keeps a frame only when it differs
-from the last *kept* frame (dHash distance >= 6 bits or mean grey drift >= 8/255);
-unchanged grabs are only counted. The store keeps just the newest kept frame.
+through Pipeline.ingest_image, whose FrameGate (escort/diff.py) works like a video
+encoder's keyframe logic: each grab is shrunk to a blurred 384x216 grey copy and
+compared with the last *kept* frame per pixel and per 12x12 tile. Repeats and cursor
+moves (too few changed pixels/tiles) are never resent; a real change is held until
+the next grab matches it (the screen settled), so a scroll or fade yields one frame;
+a screen that never settles (video) yields at most one frame every 8 s. Skipped
+grabs are only counted. The store keeps just the newest kept frame.
 
 Every loop fails soft: a missing dependency, device or key is reported through
 `LiveStats.fail` / store warnings and never raises out of the thread.

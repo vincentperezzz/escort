@@ -77,6 +77,33 @@ class ProjectSessionStore:
             raise KeyError("Invalid session path")
         return target
 
+    def media_dir(self, session_id: str) -> Path:
+        """Where a session's kept visuals live: sessions/<id>_media/."""
+        return self._path(session_id).with_name(f"{_safe_id(session_id, 'session_id')}_media")
+
+    def keep_visuals(self, session_id: str, snapshots: list[dict[str, Any]], media_root: Path) -> list[dict[str, Any]]:
+        """Copy the meeting's visuals out of the live media folder (wiped on the next meeting)."""
+        import shutil
+
+        kept: list[dict[str, Any]] = []
+        folder = self.media_dir(session_id)
+        for item in snapshots:
+            name = Path(str(item.get("url") or "")).name
+            source = media_root / name
+            if not name or not source.is_file():
+                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, folder / name)
+            kept.append({**item, "url": f"/api/sessions/{session_id}/media/{name}"})
+        return kept
+
+    def resolve_media(self, session_id: str, name: str) -> Path | None:
+        root = self.media_dir(session_id).resolve()
+        target = (root / name).resolve()
+        if target.parent != root or not target.is_file():
+            return None
+        return target
+
     def list_summaries(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for path in self.sessions_dir.glob("*.json"):
@@ -139,6 +166,7 @@ class ProjectSessionStore:
             payload["commitments"] = data.get("commitments")
         if isinstance(data.get("meeting"), dict):
             payload.setdefault("meeting", data["meeting"])
+        payload["snapshots"] = list(data.get("snapshots") or [])
         return payload
 
     def save(
@@ -178,6 +206,7 @@ class ProjectSessionStore:
             "commitments": commitments,
             "open_items": open_items,
             "meeting": meeting,
+            "snapshots": list(snapshot.get("snapshots") or []),
         }
         path = self._path(sid)
         path.write_text(json.dumps(record, indent=2), encoding="utf-8")
@@ -188,6 +217,9 @@ class ProjectSessionStore:
         if not path.is_file():
             return False
         path.unlink()
+        import shutil
+
+        shutil.rmtree(self.media_dir(session_id), ignore_errors=True)
         return True
 
     def delete_all(self) -> int:

@@ -146,7 +146,10 @@ def run_replay(pipeline: Pipeline, scenario: Scenario, *, pace_ms: int = 0, mode
         frames_by_utt.setdefault(frame.at, []).append(frame)
     for utterance in scenario.utterances:
         for frame in frames_by_utt.get(utterance.id, []):
-            pipeline.ingest_image(Image.open(frame.path).convert("RGB"))
+            image = Image.open(frame.path).convert("RGB")
+            # A scripted frame is a screen that holds: show it twice so the gate sees it settle.
+            pipeline.ingest_image(image)
+            pipeline.ingest_image(image.copy())
         if pace_ms > 0:
             time.sleep(pace_ms / 1000)
         pipeline.ingest_wav(utterance.audio, speaker=utterance.speaker)
