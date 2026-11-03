@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { File, FilePdf, FileText, MagnifyingGlass, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
-import { GoogleLogo } from "../BrandIcons.jsx";
+import { GoogleDriveLogo } from "../BrandIcons.jsx";
 import ConnectAccounts from "../ConnectAccounts.jsx";
 import { Button } from "../ui.jsx";
 import { api, post } from "../../lib/api.js";
@@ -237,7 +237,7 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
                         onChange={() => toggle(hit.id)}
                       />
                       <span className="flex min-w-0 flex-1 gap-2.5">
-                        <GoogleLogo size={18} className="mt-0.5 shrink-0" aria-hidden />
+                        <GoogleDriveLogo size={28} className="mt-0.5 shrink-0" aria-hidden />
                         <MimeIcon size={16} className="mt-0.5 shrink-0 text-[#c6bfff]" aria-hidden />
                         <span className="min-w-0">
                           <span className="block text-sm font-medium">{hit.title}</span>
