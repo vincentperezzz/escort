@@ -1,29 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { File, FilePdf, FileText, FolderSimple, LinkSimple, MagnifyingGlass, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
-import { GoogleDriveLogo } from "../BrandIcons.jsx";
+import { FolderSimple, LinkSimple, MagnifyingGlass, ShieldCheck } from "@phosphor-icons/react";
+import FileTypeIcon from "../FileTypeIcon.jsx";
 import ConnectAccounts from "../ConnectAccounts.jsx";
 import { Button } from "../ui.jsx";
 import { api, post } from "../../lib/api.js";
 import ContextDialog from "./ContextDialog.jsx";
 
-const GOOGLE_DOC = "application/vnd.google-apps.document";
-const GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet";
-const GOOGLE_SLIDES = "application/vnd.google-apps.presentation";
-const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
 /** A pasted drive.google.com / docs.google.com link instead of a search. */
 const isDriveLink = (text) => /^(https?:\/\/)?(drive|docs)\.google\.com\//i.test(text.trim());
-
-function mimeIcon(mime) {
-  if (mime === GOOGLE_DOC || mime === "text/plain" || mime === "text/markdown" || mime === "text/x-markdown") {
-    return FileText;
-  }
-  if (mime === GOOGLE_SHEET) return Table;
-  if (mime === GOOGLE_SLIDES) return PresentationChart;
-  if (mime === "application/pdf") return FilePdf;
-  if (mime === DOCX) return FileText;
-  return File;
-}
 
 export default function GoogleImportDialog({ onClose, onImported, refresh, onConnectAccounts }) {
   const afterImport = onImported || refresh;
@@ -256,7 +240,6 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
               </li>
             ) : (
               hits.map((hit) => {
-                const MimeIcon = mimeIcon(hit.mimeType);
                 return (
                   <li key={hit.id}>
                     <label className="flex cursor-pointer gap-3 rounded-xl px-3 py-2.5 hover:bg-white/[0.04]">
@@ -267,8 +250,7 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
                         onChange={() => toggle(hit.id)}
                       />
                       <span className="flex min-w-0 flex-1 gap-2.5">
-                        <GoogleDriveLogo size={28} className="mt-0.5 shrink-0" aria-hidden />
-                        <MimeIcon size={16} className="mt-0.5 shrink-0 text-[#c6bfff]" aria-hidden />
+                        <FileTypeIcon mime={hit.mimeType} size={26} className="mt-0.5" />
                         <span className="min-w-0">
                           <span className="block text-sm font-medium">{hit.title}</span>
                           {hit.snippet ? <span className="mt-0.5 block line-clamp-2 text-xs text-muted">{hit.snippet}</span> : null}
