@@ -13,7 +13,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from escort.context.sources.base import ConnectorSetupError
-from escort.context.sources.notion_mcp import CLIENT_KEY, TOKEN_KEY, NotionMcp, NotionReconnectError, markdown_blocks
+from escort.context.sources.notion_mcp import (
+    CLIENT_KEY,
+    NOTION_OAUTH_REDIRECT_URI,
+    TOKEN_KEY,
+    NotionMcp,
+    NotionReconnectError,
+    markdown_blocks,
+    notion_oauth_callback_params,
+)
 from escort.context.sources.notion_source import TOKEN_KEY as REST_TOKEN_KEY
 from escort.context.sources.notion_write import NotionNotes, NotionNotesState, UnknownPageError, UpdatePlans
 from escort.context.sources.registry import Connectors, build_sources
@@ -94,9 +102,10 @@ def _span(md: str, selection: str) -> tuple[int, int] | None:
 class FakeNotion:
     """Notion's OAuth endpoints and its MCP server, in memory."""
 
-    def __init__(self, tools=None, reject_hosts=()) -> None:
+    def __init__(self, tools=None, reject_hosts=(), reject_redirects=()) -> None:
         self.tools = tools or NEW_TOOLS
         self.reject_hosts = set(reject_hosts)
+        self.reject_redirects = set(reject_redirects)
         self.requests: list[httpx.Request] = []
         self.registrations: list[dict] = []
         self.token_forms: list[dict] = []
@@ -138,7 +147,9 @@ class FakeNotion:
         if path == "/register":
             body = json.loads(request.content)
             self.registrations.append(body)
-            hosts = {urllib.parse.urlsplit(uri).hostname for uri in body["redirect_uris"]}
+            if set(body["redirect_uris"]) & self.reject_redirects:
+                return httpx.Response(400, json={"error": "invalid_redirect_uri"})
+            hosts = {urllib.parse.urlsplit(uri).hostname for uri in body["redirect_uris"] if urllib.parse.urlsplit(uri).scheme == "http"}
             if hosts & self.reject_hosts:
                 return httpx.Response(400, json={"error": "invalid_redirect_uri"})
             return httpx.Response(201, json={**body, "client_id": f"client-{len(self.registrations)}"})
@@ -295,7 +306,7 @@ def test_discovery_reads_protected_resource_then_authorization_server():
     assert meta["registration_endpoint"] == f"{ORIGIN}/register"
 
 
-def test_auth_url_has_pkce_state_consent_and_loopback_redirect():
+def test_auth_url_has_pkce_state_consent_and_custom_redirect():
     mcp, fake, _secrets, opened = _mcp()
     try:
         url = mcp.begin()
@@ -304,15 +315,19 @@ def test_auth_url_has_pkce_state_consent_and_loopback_redirect():
         assert params["response_type"] == "code" and params["client_id"] == "client-1"
         assert params["code_challenge_method"] == "S256" and len(params["code_challenge"]) == 43
         assert params["resource"] == MCP and len(params["state"]) >= 40
-        redirect = urllib.parse.urlsplit(params["redirect_uri"])
-        assert redirect.scheme == "http" and redirect.hostname == "127.0.0.1" and redirect.path == "/callback" and redirect.port
+        assert params["redirect_uri"] == NOTION_OAUTH_REDIRECT_URI
         reg = fake.registrations[0]
         assert reg["client_name"] == "Escort" and reg["token_endpoint_auth_method"] == "none"
         assert reg["grant_types"] == ["authorization_code", "refresh_token"] and reg["response_types"] == ["code"]
-        assert params["redirect_uri"] in reg["redirect_uris"]
+        assert reg["redirect_uris"] == [NOTION_OAUTH_REDIRECT_URI]
         assert mcp.pending()
     finally:
         mcp.cancel()
+
+
+def test_notion_oauth_callback_params_parses_escort_url():
+    assert notion_oauth_callback_params("escort://oauth/notion?code=c&state=s") == {"code": "c", "state": "s"}
+    assert notion_oauth_callback_params("https://evil.test/cb?code=c") is None
 
 
 def test_client_registration_is_persisted_and_reused():
@@ -346,7 +361,7 @@ def test_code_exchange_sends_verifier_and_stores_tokens_with_workspace(connected
     mcp, fake, secrets = connected
     form = fake.token_forms[0]
     assert form["grant_type"] == "authorization_code" and form["code"] == "good-code" and form["client_id"] == "client-1"
-    assert form["resource"] == MCP and form["redirect_uri"].startswith("http://127.0.0.1:") and form["code_verifier"]
+    assert form["resource"] == MCP and form["redirect_uri"] == NOTION_OAUTH_REDIRECT_URI and form["code_verifier"]
     stored = json.loads(secrets.get(TOKEN_KEY))
     assert stored["access_token"] == "at-1" and stored["refresh_token"] == "rt-1" and stored["expires_at"] == 1_000_000.0 + 28800
     assert mcp.connected() and mcp.account() == "Acme HQ" and not mcp.pending()
@@ -360,47 +375,61 @@ def test_wrong_verifier_is_refused():
     assert status == 400 and not mcp.connected()
 
 
-def test_real_loopback_redirect_completes_connection():
+def test_escort_redirect_url_completes_connection():
     mcp, fake, _secrets, _opened = _mcp()
     url = mcp.begin()
     params = _params(url)
     fake.codes["c1"] = params["code_challenge"]
-    with httpx.Client() as browser:
-        response = browser.get(params["redirect_uri"], params={"code": "c1", "state": params["state"]})
-    assert response.status_code == 200 and "connected to Notion" in response.text
+    callback = f"escort://oauth/notion?code=c1&state={params['state']}"
+    status, html = mcp.handle_callback(notion_oauth_callback_params(callback) or {})
+    assert status == 200 and "connected to Notion" in html
     assert mcp.connected()
 
 
-def test_repeated_begin_reuses_listener_and_accepts_first_tab_callback():
+def test_repeated_begin_keeps_flow_and_accepts_first_tab_callback():
     mcp, fake, _secrets, _opened = _mcp()
     url1 = mcp.begin()
     params1 = _params(url1)
     url2 = mcp.begin()
     params2 = _params(url2)
-    assert params1["redirect_uri"] == params2["redirect_uri"]
+    assert params1["redirect_uri"] == params2["redirect_uri"] == NOTION_OAUTH_REDIRECT_URI
     assert params1["state"] != params2["state"]
     fake.codes["c_first"] = params1["code_challenge"]
-    with httpx.Client() as browser:
-        response = browser.get(params1["redirect_uri"], params={"code": "c_first", "state": params1["state"]})
-    assert response.status_code == 200 and "connected to Notion" in response.text
+    status, html = mcp.handle_callback({"code": "c_first", "state": params1["state"]})
+    assert status == 200 and "connected to Notion" in html
     assert mcp.connected()
 
 
-def test_loopback_falls_back_to_localhost_then_reports_rejection_and_keeps_token():
-    fake = FakeNotion(reject_hosts={"127.0.0.1"})
-    mcp, _f, _s, _o = _mcp(fake=fake)
+def test_stale_loopback_registration_is_reregistered():
+    secrets = MemorySecretStore()
+    secrets.set(
+        CLIENT_KEY,
+        json.dumps(
+            {
+                "client_id": "stale",
+                "issuer": ORIGIN,
+                "redirect_uris": ["http://127.0.0.1:9911/callback"],
+                "token_endpoint_auth_method": "none",
+            }
+        ),
+    )
+    mcp, fake, _s, _o = _mcp(secrets=secrets)
     url = mcp.begin()
     mcp.cancel()
-    assert urllib.parse.urlsplit(_params(url)["redirect_uri"]).hostname == "localhost" and len(fake.registrations) == 2
+    assert _params(url)["redirect_uri"] == NOTION_OAUTH_REDIRECT_URI
+    assert json.loads(secrets.get(CLIENT_KEY))["client_id"] == "client-1"
+    assert fake.registrations[0]["redirect_uris"] == [NOTION_OAUTH_REDIRECT_URI]
 
-    fake = FakeNotion(reject_hosts={"127.0.0.1", "localhost"})
+
+def test_redirect_rejection_keeps_integration_token():
+    fake = FakeNotion(reject_redirects={NOTION_OAUTH_REDIRECT_URI})
     secrets = MemorySecretStore()
     secrets.set(REST_TOKEN_KEY, json.dumps({"token": REST_TOKEN, "account": "Acme"}))
     connectors = Connectors(secrets, http=httpx.Client(transport=httpx.MockTransport(fake)), open_browser=lambda _u: None)
     connectors.notion_mcp.mcp_url = MCP
     with pytest.raises(ConnectorSetupError) as err:
         connectors.connect_notion_oauth()
-    assert err.value.code == "loopback_rejected" and "integration token" in str(err.value)
+    assert err.value.code == "redirect_rejected" and "integration token" in str(err.value)
     assert secrets.get(REST_TOKEN_KEY) and connectors.notion_auth() == "token"
 
 

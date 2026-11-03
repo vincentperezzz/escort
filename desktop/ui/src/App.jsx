@@ -11,6 +11,8 @@ import Settings from "./screens/Settings.jsx";
 import Overlay from "./screens/Overlay.jsx";
 import ProjectSelector from "./components/ProjectSelector.jsx";
 import SwitchConfirmationBanner from "./components/SwitchConfirmationBanner.jsx";
+import FirstProjectOnboarding from "./components/projects/FirstProjectOnboarding.jsx";
+import { requiresProjectSetup } from "./lib/projectGate.js";
 
 const NAV = [
   { id: "home", label: "Home", Icon: House },
@@ -130,6 +132,12 @@ function Shell({ route }) {
   }, [listening, status]);
 
   useFaviconState(listening);
+
+  const onboarding = requiresProjectSetup(status);
+
+  if (onboarding) {
+    return <FirstProjectOnboarding refresh={refresh} go={go} />;
+  }
 
   const ctx = status?.context || {};
   const badge = ctx.items?.length || (status?.meeting?.prd_sections || []).length;

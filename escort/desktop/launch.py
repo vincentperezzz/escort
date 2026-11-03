@@ -53,16 +53,39 @@ def start_whatsapp() -> None:
     threading.Thread(target=uvicorn.Server(config).run, name="escort-whatsapp", daemon=True).start()
 
 
+def _handle_protocol_url(runtime: DesktopRuntime, url: str) -> None:
+    from escort.context.sources.notion_mcp import notion_oauth_callback_params
+
+    params = notion_oauth_callback_params(url)
+    if params is None:
+        return
+    runtime.connectors.notion_mcp.handle_callback(params)
+    runtime.show_main_window()
+
+
 def main(argv: list[str] | None = None) -> None:
+    from escort.desktop.single_instance import SingleInstance, escort_protocol_urls, register_escort_protocol
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    protocol_urls = escort_protocol_urls(raw_argv)
+    register_escort_protocol()
+    instance = SingleInstance()
+    if not instance.try_acquire():
+        for url in protocol_urls:
+            instance.forward(url)
+        return
     parser = argparse.ArgumentParser(prog="escort desktop")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8750)
     parser.add_argument("--web", action="store_true")
     parser.add_argument("--demo", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
     crashlog.install()  # no-op when the frozen entry already did it
     store = MeetingStore(repo_root() / "var" / "desktop")
     runtime = DesktopRuntime(store)
+    instance.start_listener(lambda url: _handle_protocol_url(runtime, url))
+    for url in protocol_urls:
+        _handle_protocol_url(runtime, url)
     if args.demo:
         runtime.load_demo()
     try:
@@ -76,12 +99,18 @@ def main(argv: list[str] | None = None) -> None:
     app = create_desktop_app(runtime, ui_dist())
     url = f"http://{args.host}:{args.port}"
     if args.web:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="warning", log_config=None)
+        try:
+            uvicorn.run(app, host=args.host, port=args.port, log_level="warning", log_config=None)
+        finally:
+            instance.release()
         return
     config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning", log_config=None)
     server = uvicorn.Server(config)
     threading.Thread(target=server.run, name="escort-ui", daemon=True).start()
-    _open_window(url, runtime)
+    try:
+        _open_window(url, runtime)
+    finally:
+        instance.release()
 
 
 class MainWindow:

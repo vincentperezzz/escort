@@ -424,8 +424,9 @@ class CalendarSource:
     def __init__(self, connectors: Connectors, ttl_s: float = CALENDAR_TTL_S) -> None:
         self.connectors = connectors
         self.ttl_s = ttl_s
-        self._cache: tuple[float, int, list[CalendarEvent]] | None = None
+        self._cache: tuple[float, tuple[str, int], list[CalendarEvent]] | None = None
         self._lock = threading.Lock()
+        self.on_events_fetched: Callable[[list[CalendarEvent]], None] | None = None
 
     def connected(self) -> bool:
         return self.connectors.google.connected()
@@ -440,23 +441,26 @@ class CalendarSource:
         raise ConnectorError("google", "calendar does not import pages")
 
     def list_upcoming_events(self, limit: int = 5) -> list[CalendarEvent]:
-        if self.mode() == "mock":
-            return mock_calendar()[:limit]
-        if not self.connected():
-            return []
         with self._lock:
             now = time.monotonic()
+            cache_key = (self.mode(), self.connectors.generation)
             cached = self._cache
-            if cached and cached[1] == self.connectors.generation and now - cached[0] < self.ttl_s:
+            if cached and cached[1] == cache_key and now - cached[0] < self.ttl_s:
                 return cached[2][:limit]
-            # Fetch a fixed window so small and large callers share one cache entry.
-            try:
-                events = list_calendar_events(self.connectors.google, max(limit, 10))
-            except ConnectorError:
-                # Back off for one TTL instead of hitting Google on every status poll.
-                self._cache = (now, self.connectors.generation, [])
-                raise
-            self._cache = (now, self.connectors.generation, events)
+            if self.mode() == "mock":
+                events = mock_calendar()
+            elif not self.connected():
+                events = []
+            else:
+                try:
+                    events = list_calendar_events(self.connectors.google, max(limit, 10))
+                except ConnectorError:
+                    self._cache = (now, cache_key, [])
+                    raise
+            self._cache = (now, cache_key, events)
+            hook = self.on_events_fetched
+            if hook and events:
+                hook(list(events))
             return events[:limit]
 
 

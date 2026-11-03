@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import shutil
 import time
 from pathlib import Path
 from typing import Any
 
 from escort.context.extract import extract_text, sniff_kind
+from escort.context.meeting_links import (
+    ProjectMeetingsStore,
+    index_event_project_map,
+    project_context_titles,
+)
+from escort.context.meeting_matcher import match_events_with_ai
 from escort.context.models import CalendarEvent, ContextItem, Project
 from escort.store import new_id
 
@@ -42,37 +47,38 @@ class ProjectManager:
     def _init_and_migrate(self) -> None:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         if not self.index_path.exists():
-            default_proj = Project(
-                id=DEFAULT_PROJECT_ID,
-                name=DEFAULT_PROJECT_NAME,
-                description=DEFAULT_PROJECT_DESC,
-                created_at=time.time(),
-                updated_at=time.time(),
-            )
-            self._projects = {default_proj.id: default_proj}
-            self.active_id = default_proj.id
-            default_dir = self.projects_dir / DEFAULT_PROJECT_ID
-            default_dir.mkdir(parents=True, exist_ok=True)
-
-            # Auto-migrate existing single context.json if present at root
             root_context = self.base_dir / "context.json"
-            target_context = default_dir / "context.json"
-            if root_context.is_file() and not target_context.exists():
-                try:
-                    shutil.copy2(root_context, target_context)
-                    log.info("Migrated existing root context.json to %s", target_context)
-                except Exception as exc:
-                    log.warning("Could not copy existing context.json: %s", exc)
-
             root_uploads = self.base_dir / "uploads"
-            target_uploads = default_dir / "uploads"
-            if root_uploads.is_dir() and not target_uploads.exists():
-                try:
-                    shutil.copytree(root_uploads, target_uploads)
-                    log.info("Migrated existing uploads folder to %s", target_uploads)
-                except Exception as exc:
-                    log.warning("Could not copy existing uploads: %s", exc)
-
+            legacy = root_context.is_file() or root_uploads.is_dir()
+            if legacy:
+                default_proj = Project(
+                    id=DEFAULT_PROJECT_ID,
+                    name=DEFAULT_PROJECT_NAME,
+                    description=DEFAULT_PROJECT_DESC,
+                    created_at=time.time(),
+                    updated_at=time.time(),
+                )
+                self._projects = {default_proj.id: default_proj}
+                self.active_id = default_proj.id
+                default_dir = self.projects_dir / DEFAULT_PROJECT_ID
+                default_dir.mkdir(parents=True, exist_ok=True)
+                target_context = default_dir / "context.json"
+                if root_context.is_file() and not target_context.exists():
+                    try:
+                        shutil.copy2(root_context, target_context)
+                        log.info("Migrated existing root context.json to %s", target_context)
+                    except Exception as exc:
+                        log.warning("Could not copy existing context.json: %s", exc)
+                target_uploads = default_dir / "uploads"
+                if root_uploads.is_dir() and not target_uploads.exists():
+                    try:
+                        shutil.copytree(root_uploads, target_uploads)
+                        log.info("Migrated existing uploads folder to %s", target_uploads)
+                    except Exception as exc:
+                        log.warning("Could not copy existing uploads: %s", exc)
+            else:
+                self._projects = {}
+                self.active_id = ""
             self._save_index()
         else:
             self._load_index()
@@ -91,21 +97,13 @@ class ProjectManager:
                 proj = Project.from_dict(item)
                 self._projects[proj.id] = proj
 
-        if not self._projects:
-            default_proj = Project(
-                id=DEFAULT_PROJECT_ID,
-                name=DEFAULT_PROJECT_NAME,
-                description=DEFAULT_PROJECT_DESC,
-                created_at=time.time(),
-                updated_at=time.time(),
-            )
-            self._projects[default_proj.id] = default_proj
-
         active = data.get("active_id")
         if active and active in self._projects:
             self.active_id = active
-        else:
+        elif self._projects:
             self.active_id = next(iter(self._projects.keys()))
+        else:
+            self.active_id = ""
 
     def _save_index(self) -> None:
         data = {
@@ -120,12 +118,13 @@ class ProjectManager:
     def get_project(self, project_id: str) -> Project | None:
         return self._projects.get(project_id)
 
-    def get_active_project(self) -> Project:
-        proj = self.get_project(self.active_id)
-        if proj is None:
-            self.active_id = next(iter(self._projects.keys()))
-            proj = self._projects[self.active_id]
-        return proj
+    def get_active_project(self) -> Project | None:
+        if not self.active_id:
+            return None
+        return self.get_project(self.active_id)
+
+    def needs_project(self) -> bool:
+        return len(self._projects) == 0
 
     def get_project_dir(self, project_id: str) -> Path:
         proj_dir = self.projects_dir / project_id
@@ -133,6 +132,10 @@ class ProjectManager:
         return proj_dir
 
     def get_active_project_dir(self) -> Path:
+        if not self.active_id:
+            inactive = self.projects_dir / "_inactive"
+            inactive.mkdir(parents=True, exist_ok=True)
+            return inactive
         return self.get_project_dir(self.active_id)
 
     def set_active_project(self, project_id: str) -> Project:
@@ -158,13 +161,14 @@ class ProjectManager:
             id=pid,
             name=clean_name,
             description=description.strip(),
-            calendar_keywords=[str(k).strip() for k in calendar_keywords or [] if str(k).strip()],
-            calendar_domains=[str(d).strip().lower() for d in calendar_domains or [] if str(d).strip()],
-            folder_path=folder_path.strip(),
+            calendar_keywords=[],
+            calendar_domains=[],
+            folder_path="",
             auto_switch=auto_switch,
             created_at=now,
             updated_at=now,
         )
+        _ = calendar_keywords, calendar_domains, folder_path
         self._projects[pid] = proj
         self.get_project_dir(pid)
         self._save_index()
@@ -178,11 +182,7 @@ class ProjectManager:
             proj.name = str(updates["name"]).strip()
         if "description" in updates:
             proj.description = str(updates["description"]).strip()
-        if "calendar_keywords" in updates and isinstance(updates["calendar_keywords"], list):
-            proj.calendar_keywords = [str(k).strip() for k in updates["calendar_keywords"] if str(k).strip()]
-        if "calendar_domains" in updates and isinstance(updates["calendar_domains"], list):
-            proj.calendar_domains = [str(d).strip().lower() for d in updates["calendar_domains"] if str(d).strip()]
-        if "folder_path" in updates:
+        if "folder_path" in updates and str(updates["folder_path"]).strip():
             proj.folder_path = str(updates["folder_path"]).strip()
         if "auto_switch" in updates:
             proj.auto_switch = bool(updates["auto_switch"])
@@ -193,12 +193,9 @@ class ProjectManager:
     def delete_project(self, project_id: str) -> bool:
         if project_id not in self._projects:
             return False
-        if len(self._projects) <= 1:
-            raise ValueError("Cannot delete the only remaining project.")
-
         del self._projects[project_id]
         if self.active_id == project_id:
-            self.active_id = next(iter(self._projects.keys()))
+            self.active_id = next(iter(self._projects.keys()), "")
 
         proj_dir = self.projects_dir / project_id
         if proj_dir.is_dir():
@@ -234,55 +231,150 @@ class ProjectManager:
         self._save_index()
         return proj
 
-    def match_calendar_event(self, event: CalendarEvent) -> tuple[Project | None, float]:
-        """Returns the best matching project and score for an event, or (None, 0.0)."""
-        best_proj: Project | None = None
-        best_score = 0.0
+    def _meetings_store(self, project_id: str) -> ProjectMeetingsStore:
+        return ProjectMeetingsStore(self.get_project_dir(project_id))
 
-        event_text = f"{event.title} {event.description}".lower()
-        event_attendees = [a.lower() for a in event.attendees]
+    def _titles_by_project(self) -> dict[str, list[str]]:
+        return {pid: project_context_titles(self.get_project_dir(pid)) for pid in self._projects}
 
-        for proj in self._projects.values():
-            score = 0.0
-            # Check keywords against title/description
-            for kw in proj.calendar_keywords:
-                kw_lower = kw.lower()
-                if re.search(rf"\b{re.escape(kw_lower)}\b", event.title.lower()):
-                    score += 2.0
-                elif kw_lower in event_text:
-                    score += 1.0
+    def sync_meeting_links(
+        self,
+        events: list[CalendarEvent],
+        settings: Any,
+        http: Any | None = None,
+        confidence_fn: Any | None = None,
+    ) -> None:
+        if not events or not self._projects:
+            return
+        events_by_id = {event.id: event for event in events}
+        for store in (self._meetings_store(pid) for pid in self._projects):
+            store.refresh_metadata(events_by_id)
+        assignments = match_events_with_ai(
+            events,
+            self.list_projects(),
+            self._titles_by_project(),
+            settings,
+            http=http,
+            confidence_fn=confidence_fn,
+        )
+        for pid in self._projects:
+            store = self._meetings_store(pid)
+            linked = store.linked_entries()
+            excluded = store.excluded_ids()
+            per_project: dict[str, CalendarEvent | None] = {}
+            for event_id, project_id in assignments.items():
+                if event_id in excluded:
+                    continue
+                if project_id == pid:
+                    per_project[event_id] = events_by_id.get(event_id)
+                elif project_id is not None and project_id != pid:
+                    entry = linked.get(event_id)
+                    if entry and str(entry.get("linked_by") or "") == "ai":
+                        per_project[event_id] = None
+                elif project_id is None:
+                    entry = linked.get(event_id)
+                    if entry and str(entry.get("linked_by") or "") == "ai":
+                        per_project[event_id] = None
+            for event_id, entry in linked.items():
+                if str(entry.get("linked_by") or "") == "user" and event_id in events_by_id:
+                    per_project.setdefault(event_id, events_by_id[event_id])
+            store.apply_ai_links(per_project, events_by_id)
 
-            # Check attendee email domains
-            for domain in proj.calendar_domains:
-                domain_lower = domain.lstrip("@").lower()
-                for attendee in event_attendees:
-                    if attendee.endswith(f"@{domain_lower}") or domain_lower in attendee:
-                        score += 2.5
+    def rescan_meeting_links(
+        self,
+        project_id: str,
+        events: list[CalendarEvent],
+        settings: Any,
+        http: Any | None = None,
+        confidence_fn: Any | None = None,
+    ) -> dict[str, Any]:
+        self.sync_meeting_links(events, settings, http=http, confidence_fn=confidence_fn)
+        return self.meetings_view(project_id)
 
-            if score > best_score:
-                best_score = score
-                best_proj = proj
+    def meetings_view(self, project_id: str) -> dict[str, Any]:
+        if project_id not in self._projects:
+            raise KeyError(f"Project not found: {project_id}")
+        return self._meetings_store(project_id).meetings_payload()
 
-        return (best_proj, best_score) if best_score >= 1.0 else (None, 0.0)
+    def update_meetings(
+        self,
+        project_id: str,
+        add: list[str],
+        remove: list[str],
+        events: list[CalendarEvent],
+    ) -> dict[str, Any]:
+        if project_id not in self._projects:
+            raise KeyError(f"Project not found: {project_id}")
+        events_by_id = {event.id: event for event in events}
+        for eid in add:
+            eid = str(eid).strip()
+            if not eid:
+                continue
+            for other_id in self._projects:
+                if other_id == project_id:
+                    continue
+                other = self._meetings_store(other_id)
+                if eid in other.linked_entries():
+                    other.apply_user_changes([], [eid], events_by_id)
+        self._meetings_store(project_id).apply_user_changes(add, remove, events_by_id)
+        return self.meetings_view(project_id)
+
+    def linked_events_for_project(self, project_id: str) -> list[dict[str, Any]]:
+        if project_id not in self._projects:
+            return []
+        return self._meetings_store(project_id).meetings_payload()["meetings"]
+
+    def calendar_events_with_projects(self, events: list[CalendarEvent]) -> list[dict[str, Any]]:
+        mapping = index_event_project_map(self.projects_dir, list(self._projects.keys()))
+        rows = []
+        for event in events:
+            rows.append(
+                {
+                    "event_id": event.id,
+                    "title": event.title,
+                    "start": event.start,
+                    "end": event.end,
+                    "attendees": list(event.attendees),
+                    "project_id": mapping.get(event.id),
+                }
+            )
+        return rows
+
+    def active_upcoming_meetings(self, events: list[CalendarEvent]) -> list[CalendarEvent]:
+        if not self.active_id:
+            return []
+        linked_ids = {row["event_id"] for row in self.linked_events_for_project(self.active_id)}
+        if not linked_ids:
+            return []
+        return [event for event in events if event.id in linked_ids]
+
+    def active_next_meeting(self) -> dict[str, Any] | None:
+        if not self.active_id:
+            return None
+        return self._meetings_store(self.active_id).meetings_payload().get("next")
 
     def suggested_switch(self, upcoming_events: list[CalendarEvent]) -> dict[str, Any] | None:
-        """Suggests a project switch if an upcoming meeting matches a different project."""
-        if not upcoming_events:
+        if not upcoming_events or not self.active_id:
             return None
-        # Check the next event
-        for event in upcoming_events[:3]:
-            matched_proj, score = self.match_calendar_event(event)
-            if matched_proj and matched_proj.id != self.active_id:
-                if self.dismissed_suggestion_id == f"{matched_proj.id}:{event.id}":
-                    continue
-                return {
-                    "suggestion_id": f"{matched_proj.id}:{event.id}",
-                    "project_id": matched_proj.id,
-                    "project_name": matched_proj.name,
-                    "event_id": event.id,
-                    "event_title": event.title,
-                    "event_start": event.start,
-                }
+        mapping = index_event_project_map(self.projects_dir, list(self._projects.keys()))
+        for event in upcoming_events[:5]:
+            matched_id = mapping.get(event.id)
+            if not matched_id or matched_id == self.active_id:
+                continue
+            matched_proj = self.get_project(matched_id)
+            if matched_proj is None:
+                continue
+            suggestion_id = f"{matched_id}:{event.id}"
+            if self.dismissed_suggestion_id == suggestion_id:
+                continue
+            return {
+                "suggestion_id": suggestion_id,
+                "project_id": matched_id,
+                "project_name": matched_proj.name,
+                "event_id": event.id,
+                "event_title": event.title,
+                "event_start": event.start,
+            }
         return None
 
     def dismiss_suggestion(self, suggestion_id: str) -> None:

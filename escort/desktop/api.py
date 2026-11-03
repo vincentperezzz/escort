@@ -275,10 +275,27 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     # --- Projects / Topics -----------------------------------------------------------
     @app.get("/api/projects")
     def list_projects() -> dict:
+        active = runtime.projects.get_active_project()
         return {
             "projects": [p.to_dict() for p in runtime.projects.list_projects()],
-            "active_project": runtime.projects.get_active_project().to_dict(),
+            "active_project": active.to_dict() if active else None,
         }
+
+    @app.get("/api/projects/{project_id}/meetings")
+    def get_project_meetings(project_id: str) -> dict:
+        return runtime.get_project_meetings(project_id)
+
+    @app.put("/api/projects/{project_id}/meetings")
+    def put_project_meetings(project_id: str, body: dict) -> dict:
+        return runtime.put_project_meetings(project_id, body)
+
+    @app.post("/api/projects/{project_id}/meetings/rescan")
+    def rescan_project_meetings(project_id: str) -> dict:
+        return runtime.rescan_project_meetings(project_id)
+
+    @app.get("/api/calendar/events")
+    def calendar_events() -> dict:
+        return runtime.calendar_events_public()
 
     @app.post("/api/projects")
     def create_project(body: dict) -> dict:

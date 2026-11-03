@@ -257,12 +257,18 @@ class ContextLibrary:
         self.data = {"items": [], "prep": {}, "chat": []}
         self._save()
 
-    def public_view(self, active_project: Any | None = None, projects: list[Any] | None = None) -> dict[str, Any]:
+    def public_view(
+        self,
+        active_project: Any | None = None,
+        projects: list[Any] | None = None,
+        upcoming: list[CalendarEvent] | None = None,
+    ) -> dict[str, Any]:
         prep = self.data.get("prep") or {}
+        upcoming_rows = upcoming if upcoming is not None else self.upcoming_events(6)
         return {
             "items": [item.to_dict() for item in self.items()],
             "connectors": self.connector_status(),
-            "upcoming": [event.to_dict() for event in self.upcoming_events(6)],
+            "upcoming": [event.to_dict() for event in upcoming_rows],
             "prep": prep,
             "chat": self.chat_history(),
             "active_project": active_project.to_dict() if active_project and hasattr(active_project, "to_dict") else None,

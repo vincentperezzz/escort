@@ -27,6 +27,7 @@ def test_project_manager_init_and_migration(tmp_path: Path):
 
 def test_project_crud(tmp_path: Path):
     mgr = ProjectManager(tmp_path)
+    assert len(mgr.list_projects()) == 0
     proj2 = mgr.create_project(
         name="BayaniPay Client",
         description="SOW and integration",
@@ -35,53 +36,38 @@ def test_project_crud(tmp_path: Path):
         folder_path=str(tmp_path / "notes"),
     )
     assert proj2.name == "BayaniPay Client"
-    assert len(mgr.list_projects()) == 2
+    assert len(mgr.list_projects()) == 1
+    assert proj2.calendar_keywords == []
 
-    # Update project
     updated = mgr.update_project(proj2.id, {"name": "BayaniPay Global", "description": "Updated desc"})
     assert updated.name == "BayaniPay Global"
     assert updated.description == "Updated desc"
 
-    # Set active
     mgr.set_active_project(proj2.id)
     assert mgr.get_active_project().id == proj2.id
 
-    # Switch back and delete
-    mgr.set_active_project("proj_default")
     assert mgr.delete_project(proj2.id) is True
-    assert len(mgr.list_projects()) == 1
+    assert len(mgr.list_projects()) == 0
 
 
 def test_calendar_matching_and_suggestion(tmp_path: Path):
+    from escort.context.mock_data import mock_calendar
+    from dataclasses import replace
+
+    from escort.settings import load_settings
+
     mgr = ProjectManager(tmp_path)
-    bayanipay = mgr.create_project(
-        name="BayaniPay",
-        calendar_keywords=["BayaniPay", "Bayani"],
-        calendar_domains=["bayanipay.com"],
-    )
-
-    event1 = CalendarEvent(
-        id="evt_1",
-        title="BayaniPay SOW Weekly Sync",
-        start="2026-11-03T10:00:00Z",
-        end="2026-11-03T10:30:00Z",
-        attendees=["client@bayanipay.com"],
-    )
-
-    matched, score = mgr.match_calendar_event(event1)
-    assert matched is not None
-    assert matched.id == bayanipay.id
-    assert score > 0
-
-    # Active project is default, so suggested switch should propose BayaniPay
-    suggestion = mgr.suggested_switch([event1])
+    active = mgr.create_project(name="General Active", description="")
+    mgr.set_active_project(active.id)
+    bayanipay = mgr.create_project(name="BayaniPay", description="Client SOW work")
+    events = mock_calendar()
+    mgr.sync_meeting_links(events, replace(load_settings(), api_key=None))
+    suggestion = mgr.suggested_switch(events)
     assert suggestion is not None
     assert suggestion["project_id"] == bayanipay.id
     assert suggestion["project_name"] == "BayaniPay"
-
-    # Dismiss suggestion
     mgr.dismiss_suggestion(suggestion["suggestion_id"])
-    assert mgr.suggested_switch([event1]) is None
+    assert mgr.suggested_switch(events) is None
 
 
 def test_sync_local_folder(tmp_path: Path):
@@ -91,7 +77,8 @@ def test_sync_local_folder(tmp_path: Path):
     (folder / "extra.txt").write_text("# Extra notes\nEscrow agreement.\n", encoding="utf-8")
 
     mgr = ProjectManager(tmp_path)
-    proj = mgr.create_project(name="Bayani", folder_path=str(folder))
+    proj = mgr.create_project(name="Bayani", description="Notes")
+    mgr.update_project(proj.id, {"folder_path": str(folder)})
 
     ctx = ContextLibrary(mgr.get_project_dir(proj.id), lambda k: None)
     synced = mgr.sync_local_folder(proj.id, ctx)

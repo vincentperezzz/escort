@@ -130,8 +130,13 @@ class DesktopRuntime:
         # One Google Doc per meeting; a new id when a new listening session starts or the meeting is deleted.
         self.meeting_id = new_id("mtg")
         from escort.context.project import ProjectManager
+        from escort.context.sources.registry import CalendarSource
+
         self.projects = ProjectManager(store.media_dir.parent)
         self.context = ContextLibrary(self.projects.get_active_project_dir(), self.secrets.get, connectors=self.connectors)
+        calendar_source = self.context.sources.get("google_calendar")
+        if isinstance(calendar_source, CalendarSource):
+            calendar_source.on_events_fetched = self._on_calendar_events_fetched
 
     def _context_root(self) -> Path:
         return self.store.media_dir.parent
@@ -232,15 +237,27 @@ class DesktopRuntime:
         live = self.live
         return live.error() if live is not None else None
 
+    def _on_calendar_events_fetched(self, events: list[Any]) -> None:
+        with self._lock:
+            self.projects.sync_meeting_links(events, self._settings())
+
+    def _synced_calendar_events(self, limit: int = 25) -> list[Any]:
+        from escort.context.models import CalendarEvent
+
+        return self.context.upcoming_events(limit)
+
     def public_status(self) -> dict[str, Any]:
         snapshot = self.store.snapshot()
         active_project = self.projects.get_active_project()
         all_projects = self.projects.list_projects()
-        upcoming = self.context.upcoming_events(3)
-        suggestion = self.projects.suggested_switch(upcoming)
+        all_upcoming = self._synced_calendar_events(25)
+        scoped_upcoming = self.projects.active_upcoming_meetings(all_upcoming)[:6]
+        suggestion = self.projects.suggested_switch(all_upcoming)
         return {
             "active_project": active_project.to_dict() if active_project else None,
+            "active_project_next_meeting": self.projects.active_next_meeting(),
             "projects": [p.to_dict() for p in all_projects],
+            "needs_project": self.projects.needs_project(),
             "suggested_project": suggestion,
             "listening": self.listening,
             "listening_started_at": self.listening_started_at,
@@ -261,7 +278,7 @@ class DesktopRuntime:
             "monitors": self.monitors_status(),
             "devices": list_audio_devices(),
             "meeting": snapshot,
-            "context": self.context.public_view(active_project, all_projects),
+            "context": self.context.public_view(active_project, all_projects, upcoming=scoped_upcoming),
             "connectors": self.connectors.status(),
             "notes_drive": self.notes_drive_status(),
             "notes": self.notes_status(),
@@ -304,11 +321,35 @@ class DesktopRuntime:
                 folder_path=str(body.get("folder_path") or ""),
                 auto_switch=bool(body.get("auto_switch", True)),
             )
-            if body.get("activate"):
+            if body.get("activate") or self.projects.get_active_project() is None:
                 self.projects.set_active_project(proj.id)
                 self.context.switch_root(self.projects.get_active_project_dir())
                 self.context.apply_to_store(self.store)
+            events = self._synced_calendar_events(25)
+            if events:
+                self.projects.sync_meeting_links(events, self._settings())
         return self.public_status()
+
+    def get_project_meetings(self, project_id: str) -> dict[str, Any]:
+        with self._lock:
+            return self.projects.meetings_view(project_id)
+
+    def put_project_meetings(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        add = [str(x) for x in body.get("add") or []]
+        remove = [str(x) for x in body.get("remove") or []]
+        with self._lock:
+            events = self._synced_calendar_events(25)
+            return self.projects.update_meetings(project_id, add, remove, events)
+
+    def rescan_project_meetings(self, project_id: str) -> dict[str, Any]:
+        with self._lock:
+            events = self._synced_calendar_events(25)
+            return self.projects.rescan_meeting_links(project_id, events, self._settings())
+
+    def calendar_events_public(self) -> dict[str, Any]:
+        with self._lock:
+            events = self._synced_calendar_events(25)
+            return {"events": self.projects.calendar_events_with_projects(events)}
 
     def update_project(self, project_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -407,7 +448,8 @@ class DesktopRuntime:
             f"| Watched display: {screen.get('monitor') or target.get('label') or 'Display 1'}"
         )
         try:
-            events = self.context.upcoming_events(5)
+            all_upcoming = self.context.upcoming_events(25)
+            events = self.projects.active_upcoming_meetings(all_upcoming)[:5]
         except Exception:
             events = []
         prep_id = (self.context.data.get("prep") or {}).get("selected_event_id")

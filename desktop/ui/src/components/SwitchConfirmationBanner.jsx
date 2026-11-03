@@ -36,7 +36,8 @@ export default function SwitchConfirmationBanner({ status, refresh }) {
         <div className="flex min-w-0 items-center gap-2.5 text-xs text-ink/90 sm:text-sm">
           <Folder size={17} weight="fill" className="shrink-0 text-accent" />
           <span className="truncate">
-            Upcoming meeting matches <strong className="font-semibold text-accent">{suggestion.project_name}</strong>. Switch context for this call?
+            Escort noticed an upcoming meeting that looks related to{" "}
+            <strong className="font-semibold text-accent">{suggestion.project_name}</strong>. Switch for this call?
           </span>
         </div>
 

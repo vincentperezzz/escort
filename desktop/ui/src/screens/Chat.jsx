@@ -16,7 +16,7 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 
 export default function Chat({ status, refresh, go, seed = "" }) {
   const ctx = status?.context || {};
-  const activeProj = status?.active_project || { id: "proj_default", name: "General" };
+  const activeProj = status?.active_project;
   const serverChat = ctx.chat || [];
   const [local, setLocal] = useState(null);
   const [input, setInput] = useState(() => {
@@ -90,10 +90,18 @@ export default function Chat({ status, refresh, go, seed = "" }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-auto px-4 md:px-8">
         <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col">
+          {!empty ? (
+            <header className="sticky top-0 z-10 -mx-4 flex justify-center border-b border-white/[0.06] bg-bg/85 px-4 py-3 backdrop-blur-md md:-mx-8 md:px-8">
+              <span className="inline-flex max-w-full items-center gap-2 text-[13px] font-medium text-muted">
+                <Folder size={15} weight="fill" className="shrink-0 text-accent" aria-hidden />
+                <span className="truncate text-ink/90">{activeProj?.name || "Project"}</span>
+              </span>
+            </header>
+          ) : null}
           {empty ? (
             <EmptyHero prepEvent={prepEvent} onPick={send} activeProj={activeProj} />
           ) : (
-            <ol className="flex flex-col gap-7 pb-8 pt-10" aria-live="polite">
+            <ol className="flex flex-col gap-7 pb-8 pt-8" aria-live="polite">
               {chat.map((turn, i) => (
                 <Message key={i} turn={turn} stream={i === fresh} onGrow={() => scrollToEnd(false)} />
               ))}
@@ -129,7 +137,7 @@ function EmptyHero({ prepEvent, onPick, activeProj }) {
       <Logo size={56} />
       <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-accent/[0.12] px-3.5 py-1 text-xs font-medium text-accent hairline">
         <Folder size={13} weight="fill" />
-        <span>Project: {activeProj?.name || "General"}</span>
+        <span>Project: {activeProj?.name || "Your project"}</span>
       </div>
       <h1 className="mt-4 max-w-[20ch] text-[36px] font-semibold leading-[1.08] tracking-[-0.035em] text-balance">
         What do you want to walk in knowing?
@@ -163,7 +171,7 @@ function SourceChips({ items, prepEvent, go, activeProj, onClear, chatCount }) {
     <div className="mb-3 flex flex-wrap items-center gap-1.5 px-1" aria-label="Context sources">
       <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-accent/[0.1] px-3 text-[12px] font-medium text-[#c6bfff] hairline">
         <Folder size={13} weight="fill" />
-        <span className="max-w-[120px] truncate">{activeProj?.name || "General"}</span>
+        <span className="max-w-[120px] truncate">{activeProj?.name || "Project"}</span>
       </span>
       {prepEvent ? (
         <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[12px] text-[#c6bfff]">

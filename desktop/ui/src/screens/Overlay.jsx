@@ -25,6 +25,8 @@ const bridge = typeof window !== "undefined" ? window.escortOverlay : undefined;
  */
 function useClickThrough() {
   useEffect(() => {
+    document.documentElement.classList.add("overlay-mode");
+    document.querySelectorAll('meta[name="color-scheme"], meta[name="theme-color"]').forEach((m) => m.remove());
     if (!bridge) return undefined;
     bridge.setIgnoreMouse(false);
     const keepInteractive = () => bridge.setIgnoreMouse(false);

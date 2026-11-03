@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowSquareOut, CheckCircle, FileText, GoogleDriveLogo, LinkSimple, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
-import { Button, Panel } from "./ui.jsx";
+import ConnectAccounts from "./ConnectAccounts.jsx";
+import { Button } from "./ui.jsx";
+import ContextDialog from "./context/ContextDialog.jsx";
 import { api, post } from "../lib/api.js";
 import { pickDriveFile } from "../lib/picker.js";
 
@@ -10,7 +12,6 @@ const KINDS = {
   slides: { label: "Google Slides", short: "Slides", Icon: PresentationChart, source: "google_slides" },
 };
 const LINK_KINDS = { document: "docs", spreadsheets: "sheets", presentation: "slides" };
-// capability -> [capabilities flag on the Google row, button label]
 const CONSENT = {
   docs: ["read_docs", "Allow Docs access"],
   sheets: ["read_sheets", "Allow Sheets access"],
@@ -21,7 +22,6 @@ const POLL_MS = 2000;
 const POLL_LIMIT_MS = 120000;
 const LINK = "font-medium text-[#c6bfff] underline-offset-4 hover:underline";
 
-/** What a pasted value is, before anything is sent: a typed link, a bare id, or something else. */
 export function detectLink(text) {
   const raw = (text || "").trim();
   if (!raw) return { state: "empty" };
@@ -33,17 +33,14 @@ export function detectLink(text) {
   return { state: "unknown" };
 }
 
-/**
- * Import from Google: paste a Docs, Sheets or Slides link, or pick any readable file from Drive
- * with Google's own chooser. Escort only ever reads the one item you point it at.
- */
-export default function GoogleImport({ refresh, onConnect }) {
+export default function GoogleImportDialog({ onClose, refresh, onConnectAccounts }) {
   const [link, setLink] = useState("");
   const [idKind, setIdKind] = useState("docs");
-  const [linkState, setLinkState] = useState(null); // { busy } | { ok, label } | { error, code, helpUrl, capability }
-  const [pick, setPick] = useState(null); // { busy: "opening" | "importing", name } | { ok, name } | { error, code, helpUrl, capability }
+  const [linkState, setLinkState] = useState(null);
+  const [pick, setPick] = useState(null);
   const [google, setGoogle] = useState(null);
-  const [waiting, setWaiting] = useState(null); // { capability, retry, started }
+  const [waiting, setWaiting] = useState(null);
+  const [queue, setQueue] = useState([]);
   const retryRef = useRef(null);
 
   const loadGoogle = useCallback(async () => {
@@ -61,7 +58,6 @@ export default function GoogleImport({ refresh, onConnect }) {
     loadGoogle();
   }, [loadGoogle]);
 
-  // After "Allow … access", wait for Google's grant, then finish what the user was doing.
   useEffect(() => {
     if (!waiting) return undefined;
     const timer = setInterval(async () => {
@@ -92,6 +88,7 @@ export default function GoogleImport({ refresh, onConnect }) {
 
   const detected = detectLink(link);
   const kind = detected.state === "link" ? detected.kind : detected.state === "id" ? idKind : null;
+  const connected = Boolean(google?.connected);
 
   async function importLink(event) {
     event?.preventDefault();
@@ -103,6 +100,7 @@ export default function GoogleImport({ refresh, onConnect }) {
       await post("/api/context/import", { source, external_id: value });
       setLink("");
       setLinkState({ ok: true, label: KINDS[kind || "docs"].label });
+      setQueue((q) => [...q, value]);
       refresh();
     } catch (err) {
       setLinkState({ error: err.message || "Could not import that link.", code: err.code, helpUrl: err.helpUrl, capability: err.capability });
@@ -136,61 +134,91 @@ export default function GoogleImport({ refresh, onConnect }) {
   const linkWaiting = waiting && waiting.capability !== "drive_files" ? waiting.capability : null;
 
   return (
-    <Panel title="Import from Google" hint="Paste a Docs, Sheets or Slides link, or pick a file from Drive. Escort reads only that one item.">
-      <form className="field flex items-center gap-2 py-1 pl-4 pr-1" onSubmit={importLink}>
-        {kind ? (
-          (() => {
-            const { Icon } = KINDS[kind];
-            return <Icon size={16} className="shrink-0 text-[#c6bfff]" aria-hidden />;
-          })()
-        ) : (
-          <LinkSimple size={16} className="shrink-0 text-faint" aria-hidden />
-        )}
-        <input
-          className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none focus-visible:outline-none"
-          value={link}
-          onChange={(e) => {
-            setLink(e.target.value);
-            if (linkState && !linkState.busy) setLinkState(null);
-          }}
-          aria-label="Google Docs, Sheets or Slides link"
-          aria-describedby="google-link-kind"
-          placeholder="https://docs.google.com/…"
-          spellCheck={false}
-          autoComplete="off"
-        />
-        <Button type="submit" size="sm" disabled={busy || !link.trim() || ["other", "published"].includes(detected.state)}>
-          {busy ? "Importing…" : "Import"}
+    <ContextDialog
+      title="Import from Google"
+      description="Paste a Docs, Sheets, or Slides link, or pick a file from Drive."
+      onClose={onClose}
+      widthClass="max-w-xl"
+      footer={
+        <Button variant="primary" onClick={onClose}>
+          Done
         </Button>
-      </form>
+      }
+    >
+      {!connected ? (
+        <div className="rounded-2xl bg-white/[0.03] p-4 hairline">
+          <p className="mb-4 text-sm text-muted">Connect Google to import Docs, Sheets, Slides, and Drive files.</p>
+          <ConnectAccounts
+            compact
+            onChange={() => {
+              loadGoogle().then((row) => {
+                if (row?.connected) {
+                  refresh?.();
+                  onConnectAccounts?.();
+                }
+              });
+            }}
+          />
+        </div>
+      ) : (
+        <>
+          <form className="field flex items-center gap-2 py-1 pl-4 pr-1" onSubmit={importLink}>
+            {kind ? (
+              (() => {
+                const { Icon } = KINDS[kind];
+                return <Icon size={16} className="shrink-0 text-[#c6bfff]" aria-hidden />;
+              })()
+            ) : (
+              <LinkSimple size={16} className="shrink-0 text-faint" aria-hidden />
+            )}
+            <input
+              className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none focus-visible:outline-none"
+              value={link}
+              onChange={(e) => {
+                setLink(e.target.value);
+                if (linkState && !linkState.busy) setLinkState(null);
+              }}
+              aria-label="Google Docs, Sheets or Slides link"
+              aria-describedby="google-link-kind"
+              placeholder="https://docs.google.com/…"
+              spellCheck={false}
+              autoComplete="off"
+              autoFocus
+            />
+            <Button type="submit" size="sm" disabled={busy || !link.trim() || ["other", "published"].includes(detected.state)}>
+              {busy ? "Importing…" : "Import"}
+            </Button>
+          </form>
 
-      <LinkKind detected={detected} idKind={idKind} onIdKind={setIdKind} />
+          <LinkKind detected={detected} idKind={idKind} onIdKind={setIdKind} />
 
-      {linkState?.ok ? (
-        <p className="flex items-center gap-1.5 text-xs text-commit" role="status">
-          <CheckCircle size={14} aria-hidden /> Added to your library as {linkState.label}.
-        </p>
-      ) : null}
-      {linkState?.error ? (
-        <ImportError
-          state={linkState}
-          waiting={linkWaiting === linkState.capability}
-          onAllow={() => allow(linkState.capability, () => importLink())}
-          onConnect={onConnect}
-        />
-      ) : null}
+          {linkState?.ok ? (
+            <p className="flex items-center gap-1.5 text-xs text-commit" role="status">
+              <CheckCircle size={14} aria-hidden /> Added to your library as {linkState.label}.
+            </p>
+          ) : null}
+          {linkState?.error ? (
+            <ImportError state={linkState} waiting={linkWaiting === linkState.capability} onAllow={() => allow(linkState.capability, () => importLink())} onConnect={onConnectAccounts} />
+          ) : null}
 
-      <div className="border-t border-white/[0.06] pt-4">
-        <DrivePicker
-          google={google}
-          pick={pick}
-          waiting={waiting?.capability === "drive_files"}
-          onPick={pickFromDrive}
-          onAllow={() => allow("drive_files", pickFromDrive)}
-          onConnect={onConnect}
-        />
-      </div>
-    </Panel>
+          <div className="mt-5 border-t border-white/[0.06] pt-4">
+            <DrivePicker
+              google={google}
+              pick={pick}
+              waiting={waiting?.capability === "drive_files"}
+              onPick={pickFromDrive}
+              onAllow={() => allow("drive_files", pickFromDrive)}
+              onConnect={onConnectAccounts}
+            />
+          </div>
+          {queue.length ? (
+            <p className="mt-3 text-xs text-muted" role="status">
+              {queue.length} link{queue.length === 1 ? "" : "s"} imported this session.
+            </p>
+          ) : null}
+        </>
+      )}
+    </ContextDialog>
   );
 }
 
@@ -201,7 +229,6 @@ const PICKER_REASONS = {
   no_app_id: "Escort could not read the project number from your Google client ID. Check the Client ID under Connect accounts.",
 };
 
-/** One quiet line under the field: what Escort will read, or a type switch for a bare id. */
 function LinkKind({ detected, idKind, onIdKind }) {
   const base = "flex min-h-7 flex-wrap items-center gap-2 text-xs";
   if (detected.state === "link") {
@@ -276,7 +303,6 @@ function ImportError({ state, waiting, onAllow, onConnect }) {
   );
 }
 
-/** "Pick from Drive": Google's own chooser; Escort gets access to the picked file only (drive.file). */
 function DrivePicker({ google, pick, waiting, onPick, onAllow, onConnect }) {
   const live = Boolean(google?.connected) && google?.mode !== "mock";
   const hasKey = Boolean(google?.has_api_key);
@@ -335,9 +361,7 @@ function DrivePicker({ google, pick, waiting, onPick, onAllow, onConnect }) {
           <CheckCircle size={14} aria-hidden /> Added {pick.name} to your library as Google Drive.
         </p>
       ) : null}
-      {pick?.error ? (
-        <ImportError state={pick} waiting={waiting && pick.capability === "drive_files"} onAllow={onAllow} onConnect={onConnect} />
-      ) : null}
+      {pick?.error ? <ImportError state={pick} waiting={waiting && pick.capability === "drive_files"} onAllow={onAllow} onConnect={onConnect} /> : null}
     </div>
   );
 }

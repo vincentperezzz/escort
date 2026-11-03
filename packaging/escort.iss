@@ -48,6 +48,11 @@ Source: "{#SourcePath}\..\google_client.json"; DestDir: "{app}"; Flags: ignoreve
 #endif
 #endif
 
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\escort"; ValueType: string; ValueName: ""; ValueData: "URL:Escort Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\escort"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\escort\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Escort.exe"" ""%1"""; Flags: uninsdeletekey
+
 [Icons]
 Name: "{group}\Escort"; Filename: "{app}\Escort.exe"
 Name: "{autodesktop}\Escort"; Filename: "{app}\Escort.exe"; Tasks: desktopicon

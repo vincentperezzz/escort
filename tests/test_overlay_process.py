@@ -361,3 +361,14 @@ def test_open_window_falls_back_to_pywebview_overlay_and_hotkey(monkeypatch, tmp
 def test_overlay_url_uses_loopback_for_wildcard_hosts():
     assert launch.overlay_url("http://0.0.0.0:8791") == "http://127.0.0.1:8791"
     assert launch.overlay_url("http://127.0.0.1:8791") == "http://127.0.0.1:8791"
+
+
+def test_electron_overlay_window_focus_and_mouse_flags():
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "overlay" / "main.js").read_text(encoding="utf-8")
+    assert "focusable: false," in main
+    assert "win.setFocusable(true)" in main
+    assert "win.setFocusable(false)" in main
+    assert "win.setIgnoreMouseEvents(false)" in main
+    assert "transparent: true" in main
+    assert 'backgroundColor: "#00000000"' in main

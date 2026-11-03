@@ -2,7 +2,7 @@
 
 Connect: discovery (RFC 9728 protected-resource metadata -> RFC 8414 authorization-server metadata),
 dynamic client registration (RFC 7591) done once and reused, then an authorization-code flow with
-PKCE S256 and a state check on a loopback redirect (http://127.0.0.1:<port>/callback). The user picks
+PKCE S256 and a state check on a custom-scheme redirect (escort://oauth/notion). The user picks
 on Notion's own consent page which pages Escort can see. Nothing is hardcoded but the MCP URL.
 
 Tokens live in the secret store (keyring) as one JSON record, so a rotated refresh token is always
@@ -23,7 +23,6 @@ import logging
 import re
 import secrets as stdlib_secrets
 import os
-import socket
 import subprocess
 import sys
 import threading
@@ -33,7 +32,6 @@ import webbrowser
 from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import httpx
@@ -53,8 +51,7 @@ CLIENT_KEY = "notion_mcp_client"
 CLIENT_NAME = "Escort"
 CLIENT_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2025-06-18"
-CALLBACK_PATH = "/callback"
-LOOPBACK_PORTS = 3  # registered once; the listener binds whichever is free
+NOTION_OAUTH_REDIRECT_URI = "escort://oauth/notion"
 FLOW_TIMEOUT_S = 600.0
 REFRESH_SKEW_S = 300.0
 TERMINAL_ERRORS = {"invalid_grant", "invalid_client", "unauthorized_client"}
@@ -83,11 +80,6 @@ class NotionReconnectError(ConnectorAuthError):
     code = "needs_reconnect"
 
 
-class _OAuthHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = False
-    daemon_threads = True
-
-
 @dataclass
 class PendingFlow:
     state: str
@@ -96,7 +88,6 @@ class PendingFlow:
     auth_url: str
     client: dict[str, Any]
     meta: dict[str, Any]
-    server: ThreadingHTTPServer | None = None
     timer: threading.Timer | None = None
     verifiers: dict[str, str] = field(default_factory=dict)
     finished: threading.Event = field(default_factory=threading.Event)
@@ -110,25 +101,19 @@ def _json(response: httpx.Response) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _free_ports(count: int) -> list[int]:
-    found: list[int] = []
-    sockets = []
-    try:
-        while len(found) < count:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(("127.0.0.1", 0))
-            sockets.append(sock)
-            found.append(sock.getsockname()[1])
-    finally:
-        for sock in sockets:
-            sock.close()
-    return found
+def notion_oauth_callback_params(url: str) -> dict[str, str] | None:
+    parts = urllib.parse.urlsplit(url.strip())
+    if parts.scheme != "escort":
+        return None
+    path = f"{parts.netloc}{parts.path}".strip("/")
+    if path != "oauth/notion":
+        return None
+    return {key: values[0] for key, values in urllib.parse.parse_qs(parts.query).items() if values}
 
 
 def launch_auth_window(url: str) -> bool:
     """Opens OAuth in an isolated native app window on Windows (Edge app mode) to prevent
-    third-party browser shields (such as Brave) from blocking local RFC 8252 loopback callbacks.
-    Automatically closes upon authorization callback completion.
+    third-party browser shields (such as Brave) from interfering with the OAuth redirect.
     Falls back to webbrowser.open() if Edge is not found or on non-Windows.
     """
     if sys.platform == "win32":
@@ -283,66 +268,62 @@ class NotionMcp:
         return self._meta
 
     # ---- dynamic client registration (once, reused) ---------------------------------
+    def _registration_has_redirect(self, record: dict[str, Any]) -> bool:
+        uris = record.get("redirect_uris") or []
+        return NOTION_OAUTH_REDIRECT_URI in [str(uri) for uri in uris]
+
     def ensure_client(self, meta: dict[str, Any], force_new: bool = False) -> dict[str, Any]:
         existing = self.client_registration()
-        if existing and existing.get("client_id") and existing.get("issuer") == meta["issuer"] and not force_new:
+        if (
+            existing
+            and existing.get("client_id")
+            and existing.get("issuer") == meta["issuer"]
+            and self._registration_has_redirect(existing)
+            and not force_new
+        ):
             return existing
+        if existing and not self._registration_has_redirect(existing):
+            self.secrets.delete(CLIENT_KEY)
         endpoint = meta.get("registration_endpoint")
         if not endpoint:
             raise ConnectorSetupError(PROVIDER, "Notion does not offer app registration; use an integration token instead.", code="no_registration")
         methods = meta.get("auth_methods") or []
         auth_method = "none" if not methods or "none" in methods else "client_secret_post" if "client_secret_post" in methods else "client_secret_basic"
-        ports = _free_ports(LOOPBACK_PORTS)
-        refused: list[str] = []
-        for host in ("127.0.0.1", "localhost"):
-            uris = [f"http://{host}:{port}{CALLBACK_PATH}" for port in ports]
-            body = {
-                "client_name": CLIENT_NAME,
-                "redirect_uris": uris,
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "token_endpoint_auth_method": auth_method,
+        uris = [NOTION_OAUTH_REDIRECT_URI]
+        body = {
+            "client_name": CLIENT_NAME,
+            "redirect_uris": uris,
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": auth_method,
+        }
+        try:
+            response = self.http.post(str(endpoint), json=body, headers={"Accept": "application/json"})
+        except httpx.HTTPError as err:
+            raise ConnectorError(PROVIDER, f"Could not reach Notion: {err}") from err
+        payload = _json(response)
+        if response.status_code in (200, 201) and payload.get("client_id"):
+            record = {
+                "client_id": str(payload["client_id"]),
+                "client_secret": payload.get("client_secret"),
+                "redirect_uris": [str(uri) for uri in payload.get("redirect_uris") or uris],
+                "token_endpoint_auth_method": str(payload.get("token_endpoint_auth_method") or auth_method),
+                "issuer": meta["issuer"],
+                "registered_at": self._clock(),
             }
-            try:
-                response = self.http.post(str(endpoint), json=body, headers={"Accept": "application/json"})
-            except httpx.HTTPError as err:
-                raise ConnectorError(PROVIDER, f"Could not reach Notion: {err}") from err
-            payload = _json(response)
-            if response.status_code in (200, 201) and payload.get("client_id"):
-                record = {
-                    "client_id": str(payload["client_id"]),
-                    "client_secret": payload.get("client_secret"),
-                    "redirect_uris": [str(uri) for uri in payload.get("redirect_uris") or uris],
-                    "token_endpoint_auth_method": str(payload.get("token_endpoint_auth_method") or auth_method),
-                    "issuer": meta["issuer"],
-                    "registered_at": self._clock(),
-                }
-                self.secrets.set(CLIENT_KEY, json.dumps(record, separators=(",", ":")))
-                log.info("Registered Escort with Notion (loopback host %s)", host)
-                return record
-            error = str(payload.get("error") or "")
-            if response.status_code == 400 and (error in REDIRECT_REJECTED or "redirect" in str(payload.get("error_description") or "").lower()):
-                refused.append(host)
-                continue
-            raise ConnectorError(PROVIDER, f"Notion refused to register Escort ({error or response.status_code})")
-        raise ConnectorSetupError(
-            PROVIDER,
-            "Notion would not accept Escort's local sign-in address. Use an integration token instead (Advanced).",
-            code="loopback_rejected",
-        )
+            self.secrets.set(CLIENT_KEY, json.dumps(record, separators=(",", ":")))
+            log.info("Registered Escort with Notion (redirect %s)", NOTION_OAUTH_REDIRECT_URI)
+            return record
+        error = str(payload.get("error") or "")
+        if response.status_code == 400 and (error in REDIRECT_REJECTED or "redirect" in str(payload.get("error_description") or "").lower()):
+            raise ConnectorSetupError(
+                PROVIDER,
+                "Notion would not accept Escort's sign-in redirect. Use an integration token instead (Advanced).",
+                code="redirect_rejected",
+            )
+        raise ConnectorError(PROVIDER, f"Notion refused to register Escort ({error or response.status_code})")
 
     # ---- browser flow ---------------------------------------------------------------
-    def _bind(self, client: dict[str, Any]) -> tuple[ThreadingHTTPServer, str] | None:
-        for uri in client.get("redirect_uris") or []:
-            parts = urllib.parse.urlsplit(uri)
-            if parts.scheme != "http" or parts.hostname not in ("127.0.0.1", "localhost") or not parts.port:
-                continue
-            try:
-                server = _OAuthHTTPServer(("127.0.0.1", parts.port), _make_handler(self, parts.path or "/"))
-            except OSError:
-                continue
-            return server, uri
-        return None
 
     def build_auth_url(self, meta: dict[str, Any], client: dict[str, Any], redirect_uri: str, state: str, challenge: str) -> str:
         params = {
@@ -358,23 +339,21 @@ class NotionMcp:
         return f"{meta['authorization_endpoint']}{joiner}{urllib.parse.urlencode(params)}"
 
     def begin(self, open_browser: bool = True, timeout_s: float = FLOW_TIMEOUT_S) -> str:
-        """Discover, register once, listen on the registered loopback port, open Notion's consent page."""
+        """Discover, register once, open Notion's consent page; finish via escort:// callback."""
         meta = self.discover()
         client = self.ensure_client(meta)
         state = stdlib_secrets.token_urlsafe(32)
         verifier, challenge = pkce_pair()
+        redirect_uri = NOTION_OAUTH_REDIRECT_URI
         with self._flow_lock:
             existing = self._flow
             if (
                 existing is not None
                 and not existing.finished.is_set()
-                and existing.server is not None
-                and existing.redirect_uri in (client.get("redirect_uris") or [])
+                and existing.redirect_uri == redirect_uri
                 and existing.client.get("client_id") == client.get("client_id")
             ):
-                # Keep the already-bound loopback server alive so previously opened browser tabs
-                # still connect to the same port and can complete with their original state/verifier.
-                auth_url = self.build_auth_url(meta, client, existing.redirect_uri, state, challenge)
+                auth_url = self.build_auth_url(meta, client, redirect_uri, state, challenge)
                 existing.verifiers[existing.state] = existing.verifier
                 existing.verifiers[state] = verifier
                 existing.state = state
@@ -390,17 +369,8 @@ class NotionMcp:
                 existing.timer = timer
                 self.last_error = None
                 flow = existing
-                start_server = False
             else:
                 self._cancel_locked()
-                bound = self._bind(client)
-                if bound is None:
-                    # Every registered port is taken right now: register fresh ports once.
-                    client = self.ensure_client(meta, force_new=True)
-                    bound = self._bind(client)
-                if bound is None:
-                    raise ConnectorSetupError(PROVIDER, "Escort could not open a local port for the Notion sign-in. Try again.", code="no_port")
-                server, redirect_uri = bound
                 auth_url = self.build_auth_url(meta, client, redirect_uri, state, challenge)
                 flow = PendingFlow(
                     state=state,
@@ -409,7 +379,6 @@ class NotionMcp:
                     auth_url=auth_url,
                     client=client,
                     meta=meta,
-                    server=server,
                     verifiers={state: verifier},
                 )
                 timer = threading.Timer(timeout_s, self._expire, args=(flow,))
@@ -418,9 +387,6 @@ class NotionMcp:
                 flow.timer = timer
                 self._flow = flow
                 self.last_error = None
-                start_server = True
-        if start_server and flow.server is not None:
-            threading.Thread(target=flow.server.serve_forever, name="escort-notion-oauth", daemon=True).start()
         if open_browser:
             try:
                 self._open_browser(flow.auth_url)
@@ -450,21 +416,6 @@ class NotionMcp:
         if flow.timer is not None:
             flow.timer.cancel()
             flow.timer = None
-        server, flow.server = flow.server, None
-        if server is not None:
-
-            def _stop() -> None:
-                time.sleep(0.05)
-                try:
-                    server.shutdown()
-                except Exception:
-                    pass
-                try:
-                    server.server_close()
-                except Exception:
-                    pass
-
-            threading.Thread(target=_stop, daemon=True).start()
 
     def handle_callback(self, params: dict[str, str]) -> tuple[int, str]:
         with self._flow_lock:
@@ -1072,32 +1023,3 @@ def blocks_markdown(children: list[dict[str, Any]]) -> str:
     return "\n".join(block_markdown(item) for item in children)
 
 
-def _make_handler(auth: NotionMcp, path: str) -> type[BaseHTTPRequestHandler]:
-    expected_path = path.rstrip("/") or "/"
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            parsed = urllib.parse.urlsplit(self.path)
-            req_path = parsed.path.rstrip("/") or "/"
-            params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items() if values}
-            if req_path != expected_path and "code" not in params and "error" not in params:
-                self.send_response(404)
-                self.end_headers()
-                return
-            status, html = auth.handle_callback(params)
-            body = html.encode("utf-8")
-            try:
-                self.send_response(status)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-                self.wfile.flush()
-            except OSError:
-                pass
-
-        def log_message(self, format: str, *args: Any) -> None:
-            return
-
-    return Handler
