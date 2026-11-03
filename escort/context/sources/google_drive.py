@@ -142,6 +142,94 @@ def search_drive_files(auth: GoogleAuth, query: str, limit: int = 20) -> list[di
     return hits[:capped]
 
 
+FOLDER_MIME = "application/vnd.google-apps.folder"
+MAX_FOLDER_FILES = 40
+MAX_FOLDER_DEPTH = 3
+_LINK_ID = (
+    re.compile(r"/folders/([A-Za-z0-9_-]{10,200})"),
+    re.compile(r"/(?:file|document|spreadsheets|presentation)/d/([A-Za-z0-9_-]{10,200})"),
+    re.compile(r"[?&]id=([A-Za-z0-9_-]{10,200})"),
+)
+
+
+def parse_drive_link(text: str) -> str:
+    """The file or folder id in a pasted drive.google.com / docs.google.com link (or a bare id)."""
+    raw = (text or "").strip().strip("<>\"' ")
+    if _FILE_ID.match(raw):
+        return raw
+    host = re.match(r"^(?:https?://)?([^/?#]+)", raw)
+    if host and host.group(1).lower() in {"drive.google.com", "docs.google.com"}:
+        for pattern in _LINK_ID:
+            match = pattern.search(raw)
+            if match:
+                return match.group(1)
+    raise ConnectorSetupError(PROVIDER, "Paste a Google Drive file or folder link, e.g. drive.google.com/drive/folders/…", code="bad_link")
+
+
+def _hit(raw: dict[str, Any], folder: str = "") -> dict[str, Any]:
+    mime = str(raw.get("mimeType") or "")
+    label = MIME_LABELS.get(mime, mime)
+    return {
+        "id": str(raw.get("id") or ""),
+        "title": str(raw.get("name") or "Untitled"),
+        "snippet": f"{label} · {folder}" if folder else label,
+        "mimeType": mime,
+        "modified": str(raw.get("modifiedTime") or ""),
+    }
+
+
+def resolve_drive_link(auth: GoogleAuth, text: str) -> dict[str, Any]:
+    """A pasted link -> the importable files behind it.
+
+    A file link gives that file; a folder link gives its supported files, subfolders included
+    (up to MAX_FOLDER_DEPTH levels and MAX_FOLDER_FILES files). Returns
+    {"folder": name | None, "hits": [search-shaped rows], "skipped": unsupported count, "truncated": bool}.
+    """
+    file_id = parse_drive_link(text)
+    auth.require("drive_browse")
+    meta = _call(auth, f"{DRIVE_FILES_URL}/{file_id}", {"fields": "id,name,mimeType,modifiedTime", "supportsAllDrives": "true"}).json()
+    mime = str(meta.get("mimeType") or "")
+    if mime != FOLDER_MIME:
+        if mime not in IMPORTABLE_MIMES:
+            raise ConnectorSetupError(PROVIDER, UNSUPPORTED, code="unsupported_type")
+        return {"folder": None, "hits": [_hit(meta)], "skipped": 0, "truncated": False}
+    hits: list[dict[str, Any]] = []
+    skipped = 0
+    truncated = False
+    queue: list[tuple[str, str, int]] = [(file_id, str(meta.get("name") or "Folder"), 0)]
+    while queue and not truncated:
+        folder_id, folder_name, depth = queue.pop(0)
+        page_token: str | None = None
+        while True:
+            params = {
+                "q": f"'{folder_id}' in parents and trashed = false",
+                "pageSize": "100",
+                "fields": "nextPageToken,files(id,name,mimeType,modifiedTime)",
+                "orderBy": "folder,name",
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            payload = _call(auth, DRIVE_FILES_URL, params).json()
+            for raw in payload.get("files") or []:
+                child_mime = str(raw.get("mimeType") or "")
+                if child_mime == FOLDER_MIME:
+                    if depth + 1 < MAX_FOLDER_DEPTH:
+                        queue.append((str(raw.get("id")), f"{folder_name}/{raw.get('name')}", depth + 1))
+                elif child_mime in IMPORTABLE_MIMES:
+                    if len(hits) >= MAX_FOLDER_FILES:
+                        truncated = True
+                        break
+                    hits.append(_hit(raw, folder_name))
+                else:
+                    skipped += 1
+            page_token = str(payload.get("nextPageToken") or "") or None
+            if truncated or not page_token:
+                break
+    return {"folder": str(meta.get("name") or "Folder"), "hits": hits, "skipped": skipped, "truncated": truncated}
+
+
 def _call(auth: GoogleAuth, url: str, params: dict[str, str]) -> Any:
     try:
         return auth.request("GET", url, params=params)

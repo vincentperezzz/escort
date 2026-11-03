@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CaretDown, CaretUp, Play, Stop, ArrowUp, X, Lightning, ChatCircleText, ListChecks, ArrowsClockwise, Drop } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, Play, Stop, ArrowUp, X, Lightning, ChatCircleText, ListChecks, ArrowsClockwise, Drop, NotePencil, Check } from "@phosphor-icons/react";
 import Logo from "../components/Logo.jsx";
 import { api, post, mmss } from "../lib/api.js";
 import ScreenLine from "../components/ScreenLine.jsx";
@@ -147,13 +147,33 @@ export default function Overlay() {
     updateOverlay({ collapsed: !collapsed });
   }, [collapsed, updateOverlay]);
 
+  const [switching, setSwitching] = useState(false);
   const toggleListen = useCallback(async () => {
+    if (switching) return;
+    setSwitching(true);
+    const on = !listening;
     try {
-      await post("/api/listen", { on: !listening });
+      await post("/api/listen", { on });
+    } catch {
+      // One retry: a stop must never be lost to a slow or dropped request.
+      await post("/api/listen", { on }).catch(() => {});
     } finally {
+      setSwitching(false);
       refresh();
     }
-  }, [listening, refresh]);
+  }, [listening, refresh, switching]);
+
+  const restartCapture = useCallback(async () => {
+    setSwitching(true);
+    try {
+      await post("/api/listen/restart", {});
+    } catch {
+      /* the chip stays, so the user can try again */
+    } finally {
+      setSwitching(false);
+      refresh();
+    }
+  }, [refresh]);
 
   const act = useCallback(
     async (id, action) => {
@@ -255,6 +275,7 @@ export default function Overlay() {
         onTune={toggleTuning}
         onToggle={toggleCollapsed}
         onListen={toggleListen}
+        switching={switching}
         onOpenApp={openMainApp}
         project={activeProj}
       />
@@ -265,7 +286,7 @@ export default function Overlay() {
         <>
           <section data-hit className="ov-glass ov-panel flex min-h-0 shrink flex-col rounded-[24px]" aria-label="Escort live cards">
             <div className="ov-stack flex min-h-0 flex-col gap-2 overflow-y-auto p-2.5 pb-6">
-              <ScreenChip status={status} />
+              <ScreenChip status={status} onRestart={restartCapture} restarting={switching} />
               {nudges.loud.map((n) => (
                 <NudgeCard key={n.id} nudge={n} onAct={actNudge} acting={acting} />
               ))}
@@ -299,7 +320,7 @@ const Clock = memo(function Clock({ listening, startedAt }) {
   );
 });
 
-const Pill = memo(function Pill({ listening, startedAt, offline, title, ticker, hint, count, open, tuning, onTune, onToggle, onListen, onOpenApp, project }) {
+const Pill = memo(function Pill({ listening, startedAt, offline, title, ticker, hint, count, open, tuning, onTune, onToggle, onListen, switching, onOpenApp, project }) {
   const drag = useWindowDrag();
   return (
     <div
@@ -358,7 +379,7 @@ const Pill = memo(function Pill({ listening, startedAt, offline, title, ticker, 
       <button
         type="button"
         onClick={onListen}
-        disabled={offline}
+        disabled={offline || switching}
         aria-label={listening ? "Stop listening" : "Start listening"}
         title={listening ? "Stop listening" : "Start listening"}
         className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full disabled:opacity-40 ${
@@ -472,6 +493,9 @@ const QuickRow = memo(function QuickRow({ onAsk, busy }) {
  */
 const Composer = memo(function Composer({ onAsk, busy, project }) {
   const [input, setInput] = useState("");
+  // Note mode: what you type is your own meeting note (the skeleton of the notes written afterwards).
+  const [noting, setNoting] = useState(false);
+  const [saved, setSaved] = useState(0);
   const inputRef = useRef(null);
   const reported = useRef(false);
 
@@ -502,10 +526,25 @@ const Composer = memo(function Composer({ onAsk, busy, project }) {
 
   const submit = (e) => {
     e.preventDefault();
-    if (!input.trim() || busy) return;
+    if (!input.trim()) return;
+    if (noting) {
+      const text = input;
+      setInput("");
+      post("/api/jots", { text })
+        .then(() => setSaved((n) => n + 1))
+        .catch(() => setInput(text));
+      return;
+    }
+    if (busy) return;
     onAsk("You asked", input);
     setInput("");
   };
+
+  useEffect(() => {
+    if (!saved) return undefined;
+    const id = setTimeout(() => setSaved(0), 1600);
+    return () => clearTimeout(id);
+  }, [saved]);
 
   return (
     <form
@@ -514,6 +553,19 @@ const Composer = memo(function Composer({ onAsk, busy, project }) {
       onClick={focusBox}
       onSubmit={submit}
     >
+      <button
+        type="button"
+        onClick={() => {
+          setNoting((v) => !v);
+          inputRef.current?.focus();
+        }}
+        aria-pressed={noting}
+        aria-label={noting ? "Switch to asking Escort AI" : "Switch to writing your own notes"}
+        title={noting ? "Writing notes. Click to ask Escort AI instead." : "Write your own note"}
+        className={`press -ml-2.5 grid h-8 w-8 shrink-0 place-items-center rounded-full ${noting ? "bg-[#ffc46b] text-[#1f1302]" : "text-faint hover:bg-white/[0.08] hover:text-ink"}`}
+      >
+        {saved ? <Check size={14} aria-hidden /> : <NotePencil size={14} aria-hidden />}
+      </button>
       <input
         ref={inputRef}
         value={input}
@@ -537,15 +589,15 @@ const Composer = memo(function Composer({ onAsk, busy, project }) {
             if (!busy) onAsk(QUICK[0].label, QUICK[0].prompt);
           }
         }}
-        placeholder={project?.name && project.name !== "General" ? `Ask ${project.name}…` : "Ask Escort AI…"}
-        aria-label="Ask Escort AI"
+        placeholder={noting ? "Jot a note… Escort fills in the detail after the call" : project?.name && project.name !== "General" ? `Ask ${project.name}…` : "Ask Escort AI…"}
+        aria-label={noting ? "Write a meeting note" : "Ask Escort AI"}
         autoComplete="off"
         className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint focus-visible:outline-none"
       />
       <button
         type="submit"
-        disabled={!input.trim() || busy}
-        aria-label="Send"
+        disabled={!input.trim() || (busy && !noting)}
+        aria-label={noting ? "Save note" : "Send"}
         className="press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink text-bg disabled:bg-white/[0.08] disabled:text-faint"
       >
         <ArrowUp size={15} weight="regular" aria-hidden />
@@ -562,12 +614,26 @@ const EmptyNote = memo(function EmptyNote({ offline, listening }) {
   );
 });
 
-function ScreenChip({ status }) {
+function ScreenChip({ status, onRestart, restarting }) {
   if (!status?.screen && !status?.capture_error) return null;
   if (!status?.listening && !status?.capture_error && !status?.screen?.monitoring) return null;
+  const broken = status?.listening && /transcription stopped|audio capture unavailable/i.test(status?.capture_error || "");
   return (
-    <div className="ov-tile self-start rounded-full px-3 py-1.5">
-      <ScreenLine status={status} />
+    <div className="flex flex-wrap items-center gap-1.5 self-start">
+      <div className="ov-tile rounded-full px-3 py-1.5">
+        <ScreenLine status={status} />
+      </div>
+      {broken ? (
+        <button
+          type="button"
+          onClick={onRestart}
+          disabled={restarting}
+          className="press inline-flex h-8 items-center gap-1.5 rounded-full bg-[#ffc46b] px-3 text-[12px] font-medium text-[#1f1302] hover:bg-[#ffd58f] disabled:opacity-50"
+        >
+          <ArrowsClockwise size={13} aria-hidden />
+          {restarting ? "Restarting…" : "Restart transcription"}
+        </button>
+      ) : null}
     </div>
   );
 }

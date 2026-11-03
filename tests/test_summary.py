@@ -185,3 +185,36 @@ def test_exports_emit_new_sections_only_when_non_empty():
     children = summary_children(full, "x")
     headings = [b["heading_3"]["rich_text"][0]["text"]["content"] for b in children if b["type"] == "heading_3"]
     assert headings == ["Summary", "Key takeaways", "Decisions", "Open questions", "Commitments", "Conflicts"]
+
+
+def test_jots_are_the_skeleton_of_the_notes():
+    from escort.summary import build_summary_request, parse_summary_response, rules_summary
+
+    snapshot = {"jots": [{"text": "RBAC: reps can't export", "after": "Jessa: only admins export leads"}], "meeting": {"turns": []}}
+    from escort.settings import load_settings
+
+    request = build_summary_request(load_settings(), snapshot, "")
+    text = request["messages"][1]["content"]
+    assert "MY NOTES (jotted by the user" in text and "RBAC: reps can't export" in text and "only admins export leads" in text
+    assert "from_you=true" in request["messages"][0]["content"]
+    rules = rules_summary(snapshot)
+    assert rules["notes"] == [{"heading": "Your notes", "points": [{"text": "RBAC: reps can't export", "from_you": True, "sub": []}]}]
+    payload = {"choices": [{"message": {"content": json.dumps({
+        "title": "t", "meeting_type": "client_call", "bullets": ["b"], "takeaways": [], "decisions": [], "open_questions": [],
+        "commitments": [], "conflicts": [],
+        "notes": [{"heading": "RBAC roles", "points": [{"text": "RBAC: reps can't export", "from_you": True, "sub": ["Admins only (Jessa)"]}, {"text": "", "from_you": False, "sub": []}]}],
+    })}}]}
+    parsed = parse_summary_response(payload)
+    assert parsed["meeting_type"] == "client_call"
+    assert parsed["notes"] == [{"heading": "RBAC roles", "points": [{"text": "RBAC: reps can't export", "from_you": True, "sub": ["Admins only (Jessa)"]}]}]
+
+
+def test_notes_export_to_docs_and_notion():
+    from escort.context.sources.google_docs import summary_blocks
+    from escort.context.sources.notion_write import summary_children
+
+    summary = {"bullets": ["b"], "notes": [{"heading": "RBAC roles", "points": [{"text": "Reps can't export", "from_you": True, "sub": ["Admins only"]}]}]}
+    docs = summary_blocks(summary, "now")
+    assert ("Notes", "HEADING_2") in docs and ("RBAC roles", "HEADING_3") in docs and ("    - Admins only", "NORMAL_TEXT") in docs
+    notion = [b["bulleted_list_item"]["rich_text"][0]["text"]["content"] for b in summary_children(summary, "now") if b["type"] == "bulleted_list_item"]
+    assert "Reps can't export" in notion and "↳ Admins only" in notion

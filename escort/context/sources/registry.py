@@ -40,7 +40,7 @@ from escort.context.sources.google_auth import (
     WRITE_SCOPES,
     GoogleAuth,
 )
-from escort.context.sources.google_drive import fetch_drive_file, search_drive_files
+from escort.context.sources.google_drive import fetch_drive_file, parse_drive_link, resolve_drive_link, search_drive_files
 from escort.context.sources.google_source import (
     fetch_google_link,
     list_calendar_events,
@@ -352,6 +352,17 @@ class Connectors:
         out["access_token"] = google.access_token()
         out["ready"] = True
         return out
+
+    def resolve_drive_link(self, link: str) -> dict[str, Any]:
+        """A pasted Drive file or folder link -> importable rows (demo mode: fictional rows)."""
+        if self.provider_mode("google") == "mock":
+            file_id = parse_drive_link(link)
+            folder = "/folders/" in link
+            hits = mock_drive_hits()[:3] if folder else mock_drive_hits()[:1]
+            return {"folder": "Demo folder" if folder else None, "hits": hits, "skipped": 0, "truncated": False, "id": file_id}
+        if not self.google.connected():
+            raise ConnectorAuthError(GOOGLE, "Connect Google first, then paste a Drive link.", code="not_connected")
+        return resolve_drive_link(self.google, link)
 
     def fetch_drive_file(self, file_id: str, mime_type: str = "", name: str = "") -> ContextItem:
         if self.provider_mode("google") == "mock":

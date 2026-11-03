@@ -4,6 +4,7 @@ import { Bezel, Button, Empty, Pill } from "../ui.jsx";
 import { Bubble } from "../../screens/Live.jsx";
 import { api, post } from "../../lib/api.js";
 import { KIND } from "../../lib/cards.js";
+import { nudgeMeta } from "../../lib/nudges.js";
 import NoteDestination, { UpdatePreview } from "../NoteDestination.jsx";
 import { cancelNotePage, confirmNotePage, isPageDest, noteHint, previewNotePage, saveNote, useNoteDestination } from "../../lib/notes.js";
 import { liveRecapHash } from "./parseLiveRoute.js";
@@ -63,6 +64,8 @@ export default function RecapPanel({ status, refresh, sessionId, tab, go, onBack
         commitments: fetched.commitments || fetched.meeting?.commitments || [],
         cards: fetched.cards || [],
         snapshots: fetched.snapshots || [],
+        jots: fetched.jots || [],
+        nudges: fetched.nudges || [],
         started_at: fetched.started_at,
         ended_at: fetched.ended_at,
       };
@@ -159,6 +162,14 @@ const EXTRA_SECTIONS = [
 function summaryText(s, visuals = []) {
   const lines = [s.title || "Meeting summary", ""];
   if (s.bullets?.length) lines.push("Highlights", ...s.bullets.map((b) => `- ${b}`), "");
+  if (s.notes?.length) {
+    lines.push("Notes");
+    for (const topic of s.notes) {
+      lines.push("", `## ${topic.heading}`);
+      for (const p of topic.points || []) lines.push(`- ${p.text}`, ...(p.sub || []).map((x) => `  - ${x}`));
+    }
+    lines.push("");
+  }
   for (const [key, title] of EXTRA_SECTIONS) {
     if (s[key]?.length) lines.push(title, ...s[key].map((b) => `- ${b}`), "");
   }
@@ -179,6 +190,53 @@ function BulletList({ items }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Organized notes: one heading per topic; the user's own jots in full ink, what Escort
+ * added from the transcript in grey, detail as sub-points.
+ */
+function MeetingNotes({ notes }) {
+  const mine = notes.some((t) => (t.points || []).some((p) => p.from_you));
+  return (
+    <div className="space-y-6">
+      {mine ? (
+        <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-faint">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-ink" aria-hidden /> Your notes
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-faint" aria-hidden /> Added by Escort from the call
+          </span>
+        </p>
+      ) : null}
+      {notes.map((topic, i) => (
+        <section key={i}>
+          <h3 className="text-[15.5px] font-semibold tracking-[-0.01em] text-ink">{topic.heading}</h3>
+          <ul className="mt-2 space-y-1.5">
+            {(topic.points || []).map((p, j) => (
+              <li key={j} className="max-w-[70ch]">
+                <p className={`flex gap-3 text-[14.5px] leading-relaxed ${p.from_you ? "font-medium text-ink" : "text-muted"}`}>
+                  <span className={`mt-[9px] h-1 w-1 shrink-0 rounded-full ${p.from_you ? "bg-ink" : "bg-faint"}`} aria-hidden />
+                  <span>{p.text}</span>
+                </p>
+                {p.sub?.length ? (
+                  <ul className="mt-1 space-y-1 pl-7">
+                    {p.sub.map((x, k) => (
+                      <li key={k} className="flex gap-2.5 text-[13.5px] leading-relaxed text-muted">
+                        <span className="mt-[8px] h-px w-2 shrink-0 bg-faint" aria-hidden />
+                        <span>{x}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -376,6 +434,12 @@ function SummaryView({ summary, meeting, refresh, status, go, sessionScoped }) {
         {bullets.length ? <BulletList items={bullets} /> : <p className="text-sm text-muted">Nothing notable.</p>}
       </Section>
 
+      {summary.notes?.length ? (
+        <Section title="Notes">
+          <MeetingNotes notes={summary.notes} />
+        </Section>
+      ) : null}
+
       {EXTRA_SECTIONS.map(([key, title]) =>
         summary[key]?.length ? (
           <Section key={key} title={title}>
@@ -496,10 +560,13 @@ function TranscriptView({ turns }) {
 
 function CardsView({ meeting }) {
   const cards = meeting.cards || [];
-  const open = meeting.open_items?.length ? meeting.open_items : cards.filter((c) => c.type && String(c.type).includes("conflict"));
-  const promises = meeting.commitments?.length ? meeting.commitments : cards.filter((c) => c.type && String(c.type).includes("commit"));
-  if (open.length === 0 && promises.length === 0) {
-    return <Empty title="Nothing to recap yet" body="Open items and promises collect here after cards land in Live." />;
+  const typed = (word) => cards.filter((c) => String(c.type || "").toLowerCase().includes(word));
+  const open = meeting.open_items?.length ? meeting.open_items : typed("conflict");
+  const promises = meeting.commitments?.length ? meeting.commitments : typed("commit");
+  const replies = typed("reply");
+  const nudges = meeting.nudges || [];
+  if (open.length === 0 && promises.length === 0 && replies.length === 0 && nudges.length === 0) {
+    return <Empty title="Nothing to recap yet" body="Conflicts, promises, suggested replies and Escort's heads-ups collect here as they land in Live." />;
   }
   return (
     <div className="grid gap-5 md:grid-cols-2">
@@ -521,6 +588,31 @@ function CardsView({ meeting }) {
             </p>
           </li>
         ))}
+      </Column>
+      <Column kind="reply" title="Suggested replies" count={replies.length} emptyText="No replies suggested.">
+        {replies.map((item, i) => (
+          <li key={item.id || i} className="rounded-2xl bg-white/[0.025] px-4 py-3.5 hairline">
+            <p className="text-[14.5px] leading-snug">{item.body || item.title}</p>
+            {item.trigger_text ? <p className="mt-1.5 line-clamp-2 text-[12.5px] text-muted">After: “{item.trigger_text}”</p> : null}
+          </li>
+        ))}
+      </Column>
+      <Column kind="reply" title="Escort spoke up" count={nudges.length} emptyText="No heads-ups during this call.">
+        {nudges.map((item, i) => {
+          const meta = nudgeMeta(item.kind);
+          return (
+            <li key={item.id || i} className="rounded-2xl bg-white/[0.025] px-4 py-3.5 hairline">
+              <p className="flex items-center justify-between gap-2 text-[12px] text-muted">
+                <span className="inline-flex items-center gap-1.5">
+                  <meta.Icon size={13} aria-hidden /> {meta.label}
+                </span>
+                <span>{item.status === "dismissed" ? "Dismissed" : item.status === "acted" ? "Acted on" : ""}</span>
+              </p>
+              <p className="mt-1.5 text-[14.5px] font-medium leading-snug">{item.title}</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-muted">{item.body}</p>
+            </li>
+          );
+        })}
       </Column>
     </div>
   );

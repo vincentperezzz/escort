@@ -61,6 +61,14 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
     def listen(body: dict) -> dict:
         return runtime.set_listening(bool(body.get("on")))
 
+    @app.post("/api/jots")
+    def add_jot(body: dict) -> dict:
+        return runtime.add_jot(str(body.get("text") or ""))
+
+    @app.post("/api/listen/restart")
+    def restart_listen() -> dict:
+        return runtime.restart_capture()
+
     @app.get("/api/overlay")
     def overlay() -> dict:
         return runtime.overlay_status()
@@ -215,6 +223,10 @@ def create_desktop_app(runtime: DesktopRuntime, ui_dir: Path | None = None) -> F
         if not _local_request(request):
             return JSONResponse(status_code=403, content={"error": "The Drive file chooser config is only available to the local Escort window."})
         return JSONResponse(content=runtime.google_picker_config(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/context/drive-link")
+    def context_drive_link(body: dict) -> dict:
+        return runtime.context_drive_link(str(body.get("link") or ""))
 
     @app.post("/api/context/import-drive-file")
     def context_import_drive_file(body: dict) -> dict:

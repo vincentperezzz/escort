@@ -152,6 +152,15 @@ def summary_children(summary: dict[str, Any], stamp: str) -> list[dict[str, Any]
     out = [block("heading_2", f"Recap · {stamp}"), block("heading_3", "Summary")]
     bullets = [str(item).strip() for item in summary.get("bullets") or [] if str(item).strip()]
     out += [block("bulleted_list_item", item) for item in bullets] or [block("paragraph", "Nothing notable.")]
+    notes = [topic for topic in summary.get("notes") or [] if isinstance(topic, dict) and topic.get("points")]
+    if notes:
+        out.append(block("heading_3", "Notes"))
+        for topic in notes:
+            out.append(block("paragraph", str(topic.get("heading") or "Notes")))
+            for point in topic["points"]:
+                # Flat on purpose: the Notion MCP path writes markdown and would drop nested children.
+                out.append(block("bulleted_list_item", str(point.get("text") or "")))
+                out += [block("bulleted_list_item", f"↳ {sub}") for sub in point.get("sub") or []]
     for key, heading in (("takeaways", "Key takeaways"), ("decisions", "Decisions"), ("open_questions", "Open questions")):
         items = [str(item).strip() for item in summary.get(key) or [] if str(item).strip()]
         if items:

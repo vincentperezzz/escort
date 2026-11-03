@@ -280,19 +280,22 @@ class ProactiveEngine:
         self._thread.start()
         return self
 
-    def stop(self, timeout: float = 2.0) -> None:
+    def stop(self, timeout: float = 0.2) -> None:
+        """Signal and return: an assessment in flight finishes on its own thread, which then exits."""
         self.stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
-        if self._client is not None and self._owns_client:
-            self._client.close()
 
     def _loop(self) -> None:
-        while not self.stop_event.wait(TICK_S):
-            try:
-                self.tick()
-            except Exception as exc:
-                log.warning("Proactive tick failed: %s", exc)
+        try:
+            while not self.stop_event.wait(TICK_S):
+                try:
+                    self.tick()
+                except Exception as exc:
+                    log.warning("Proactive tick failed: %s", exc)
+        finally:
+            if self._client is not None and self._owns_client:
+                self._client.close()
 
     # --- user feedback ---------------------------------------------------------
 
@@ -616,7 +619,7 @@ class ProactiveEngine:
         reason: str = "",
     ) -> NudgeRecord | None:
         now = self.clock()
-        if key in self._keys:
+        if self.stop_event.is_set() or key in self._keys:  # nothing lands after the meeting stopped
             return None
         if self._snoozed.get(kind, 0) > now:
             return None
@@ -643,7 +646,7 @@ class ProactiveEngine:
                 reason=reason,
             )
         )
-        if self.on_nudge is not None:
+        if self.on_nudge is not None and not self.stop_event.is_set():
             try:
                 self.on_nudge(nudge)
             except Exception as exc:

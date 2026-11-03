@@ -100,6 +100,14 @@ def summary_blocks(summary: dict[str, Any], stamp: str) -> list[tuple[str, str]]
     blocks.append(("Summary", "HEADING_2"))
     bullets = [str(item).strip() for item in summary.get("bullets") or [] if str(item).strip()]
     blocks.extend((f"- {item}", "NORMAL_TEXT") for item in bullets or ["Nothing notable."])
+    notes = [topic for topic in summary.get("notes") or [] if isinstance(topic, dict) and topic.get("points")]
+    if notes:
+        blocks.append(("Notes", "HEADING_2"))
+        for topic in notes:
+            blocks.append((str(topic.get("heading") or "Notes"), "HEADING_3"))
+            for point in topic["points"]:
+                blocks.append((f"- {point.get('text')}", "NORMAL_TEXT"))
+                blocks.extend((f"    - {sub}", "NORMAL_TEXT") for sub in point.get("sub") or [])
     for key, heading in (("takeaways", "Key takeaways"), ("decisions", "Decisions"), ("open_questions", "Open questions")):
         items = [str(item).strip() for item in summary.get(key) or [] if str(item).strip()]
         if items:

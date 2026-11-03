@@ -706,6 +706,9 @@ class DesktopRuntime:
     def google_picker_config(self) -> dict[str, Any]:
         return self.connectors.picker_config()
 
+    def context_drive_link(self, link: str) -> dict[str, Any]:
+        return self.connectors.resolve_drive_link(link)
+
     def context_import_drive_file(self, file_id: str, mime_type: str, name: str) -> dict[str, Any]:
         with self._lock:
             self.context.import_drive_file(file_id, mime_type, name)
@@ -1016,6 +1019,26 @@ class DesktopRuntime:
         self._notify()
         return self.public_status()
 
+    def add_jot(self, text: str) -> dict[str, Any]:
+        if not text.strip():
+            return {"ok": False, "error": "empty note"}
+        jot = self.store.add_jot(text)
+        self._notify()
+        return {"ok": True, "jot": jot}
+
+    def restart_capture(self) -> dict[str, Any]:
+        """Restart screen + audio capture inside the same live meeting: turns, cards and notes stay."""
+        with self._lock:
+            if not self.listening:
+                return self.public_status()
+            old = self.live
+            self._start_capture()
+        if old is not None:
+            threading.Thread(target=old.stop, name="escort-capture-retire", daemon=True).start()
+        self.store.warn("Transcription restarted by you.")
+        self._notify()
+        return self.public_status()
+
     def _start_capture(self) -> None:
         """Start screen + audio capture over the store. Never raises; errors land in capture_error."""
         settings = self._settings()
@@ -1065,7 +1088,7 @@ class DesktopRuntime:
         engine, self.proactive = self.proactive, None
         if engine is not None:
             try:
-                engine.stop(timeout=1.0)
+                engine.stop()
             except Exception as exc:
                 log.warning("Proactive engine did not stop cleanly: %s", exc)
 
@@ -1313,6 +1336,11 @@ class DesktopRuntime:
 
     def attach_main_window(self, controller: MainWindowController | None) -> None:
         self.main_window = controller
+
+    def main_window_minimized(self) -> None:
+        """Still live and the overlay is hidden (the user opened the main window from it): show it again."""
+        if self.listening and not self.overlay_visible:
+            self.set_overlay(visible=True)
 
     def show_main_window(self) -> None:
         """Tray 'Show Escort': always restores and raises the main window."""

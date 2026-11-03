@@ -32,6 +32,12 @@ from escort.store import utc_now
 
 SCREEN_INTERVAL_S = 1.0
 IDLE_WAIT_S = 0.01
+PCM_BYTES_PER_S = 24000 * 2  # captures hand over 24 kHz mono s16
+SILENCE_FILL_AFTER_S = 0.5  # a stream quiet this long gets digital silence, so ASR never starves
+RECONNECT_BACKOFF_S = (2.0, 5.0, 15.0, 30.0, 60.0)
+AUDIO_RESTARTS = 6  # whole-pipeline restarts in a row before giving up (a run of 60 s+ resets the count)
+AUDIO_STABLE_S = 60.0
+TRANSCRIPTION_STOPPED = "Live transcription stopped"
 
 
 class LiveStats:
@@ -62,6 +68,11 @@ class LiveStats:
         with self._lock:
             if message not in self.errors:
                 self.errors.append(message)
+
+    def clear(self, prefix: str) -> None:
+        """Drop errors that no longer hold (e.g. transcription came back after a restart)."""
+        with self._lock:
+            self.errors = [item for item in self.errors if not item.startswith(prefix)]
 
     def screen(self) -> dict[str, Any]:
         with self._lock:
@@ -222,26 +233,51 @@ def _audio_loop(
             "or pip install 'escort[whisper]' for the open-weights fallback. Screen monitoring still runs."
         )
         return
-    try:
-        capture = (audio_factory or _default_audio)()
-        capture.open(mic_index=mic_index, loopback_index=loopback_index)
-    except Exception as exc:
-        fail(f"Audio capture unavailable: {exc}")
-        return
-    stats.audio_running = True
-    try:
-        if settings.api_key:
-            _stream_muse(capture, pipeline, settings, stop, session_factory)
-        else:
-            _stream_vad(capture, pipeline, stop)
-    except Exception as exc:
-        fail(f"Live transcription stopped: {exc}")
-    finally:
-        stats.audio_running = False
+    restarts = 0
+    while not stop.is_set():
         try:
-            capture.close()
-        except Exception:
-            pass
+            capture = (audio_factory or _default_audio)()
+            capture.open(mic_index=mic_index, loopback_index=loopback_index)
+        except Exception as exc:
+            if restarts == 0:
+                fail(f"Audio capture unavailable: {exc}")
+                return
+            capture = None
+            error: Exception | None = exc
+        else:
+            error = None
+        if capture is not None:
+            stats.audio_running = True
+            if restarts:
+                stats.clear(TRANSCRIPTION_STOPPED)
+                pipeline.store.warn("Live transcription restarted.")
+            began = time.monotonic()
+            try:
+                if settings.api_key:
+                    _stream_muse(capture, pipeline, settings, stop, session_factory)
+                else:
+                    _stream_vad(capture, pipeline, stop)
+            except Exception as exc:
+                error = exc
+            finally:
+                stats.audio_running = False
+                try:
+                    capture.close()
+                except Exception:
+                    pass
+            if time.monotonic() - began >= AUDIO_STABLE_S:
+                restarts = 0
+        if stop.is_set() or error is None:
+            return
+        # Still live: the meeting keeps going, so transcription comes back on its own.
+        restarts += 1
+        stats.clear(TRANSCRIPTION_STOPPED)  # one current message, not a pile of old ones
+        if restarts > AUDIO_RESTARTS:
+            fail(f"{TRANSCRIPTION_STOPPED}: {error}. Use Restart transcription to try again.")
+            return
+        wait = RECONNECT_BACKOFF_S[min(restarts - 1, len(RECONNECT_BACKOFF_S) - 1)]
+        fail(f"{TRANSCRIPTION_STOPPED}: {error} (restarting in {wait:.0f}s)")
+        stop.wait(wait)
 
 
 def _read(capture: Any, speaker: str) -> bytes:
@@ -265,25 +301,68 @@ def _stream_muse(
         session_factory = MuseRealtimeSession
     sessions: dict[str, Any] = {}
     keywords = keywords_from_prd(pipeline.prd_text)
+    # Per stream: when the session (re)started, bytes fed since, last real audio, reconnect state.
+    started: dict[str, float] = {}
+    fed: dict[str, int] = {}
+    heard: dict[str, float] = {}
+    retry_at: dict[str, float] = {}
+    failures: dict[str, int] = {}
+
+    def open_session(speaker: str) -> None:
+        session = session_factory(
+            settings,
+            speaker,
+            on_final=pipeline.finish_turn,
+            on_partial=pipeline.note_partial,
+            keywords=keywords,
+        )
+        session.start()
+        sessions[speaker] = session
+        now = time.monotonic()
+        started[speaker], fed[speaker], heard[speaker] = now, 0, now
+
+    def revive(speaker: str) -> None:
+        """The server dropped this stream: reconnect with backoff; the other stream keeps going."""
+        now = time.monotonic()
+        if now < retry_at.get(speaker, 0.0):
+            return
+        reason = getattr(sessions.get(speaker), "error", None)
+        try:
+            open_session(speaker)
+        except Exception as exc:
+            count = failures.get(speaker, 0)
+            failures[speaker] = count + 1
+            retry_at[speaker] = now + RECONNECT_BACKOFF_S[min(count, len(RECONNECT_BACKOFF_S) - 1)]
+            pipeline.store.warn(f"Reconnecting {speaker} transcription: {exc}")
+            return
+        failures[speaker] = 0
+        pipeline.store.warn(f"{speaker} transcription reconnected" + (f" after: {reason}" if reason else "."))
+
     try:
         for speaker in capture.speakers():
-            session = session_factory(
-                settings,
-                speaker,
-                on_final=pipeline.finish_turn,
-                on_partial=pipeline.note_partial,
-                keywords=keywords,
-            )
-            session.start()
-            sessions[speaker] = session
+            open_session(speaker)
         pipeline.store.transcriber = settings.asr_model
         while not stop.is_set():
             got = False
             for speaker in capture.speakers():
                 pcm = _read(capture, speaker)
+                session = sessions[speaker]
+                if not getattr(session, "alive", True):
+                    revive(speaker)
+                    continue
+                now = time.monotonic()
                 if pcm:
                     got = True
-                    sessions[speaker].write(pcm)
+                    heard[speaker] = now
+                    if session.write(pcm) is not False:
+                        fed[speaker] += len(pcm)
+                elif now - heard[speaker] >= SILENCE_FILL_AFTER_S:
+                    # WASAPI loopback delivers nothing while nothing plays (no one in the call yet).
+                    behind = int((now - started[speaker]) * PCM_BYTES_PER_S) - fed[speaker]
+                    if behind >= PCM_BYTES_PER_S // 10:
+                        chunk = min(behind, PCM_BYTES_PER_S) & ~1
+                        if session.write(bytes(chunk)) is not False:
+                            fed[speaker] += chunk
             if not got:
                 stop.wait(IDLE_WAIT_S)
     finally:

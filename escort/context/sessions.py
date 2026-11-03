@@ -167,6 +167,8 @@ class ProjectSessionStore:
         if isinstance(data.get("meeting"), dict):
             payload.setdefault("meeting", data["meeting"])
         payload["snapshots"] = list(data.get("snapshots") or [])
+        payload["jots"] = list(data.get("jots") or [])
+        payload["nudges"] = list(data.get("nudges") or [])
         return payload
 
     def save(
@@ -207,6 +209,8 @@ class ProjectSessionStore:
             "open_items": open_items,
             "meeting": meeting,
             "snapshots": list(snapshot.get("snapshots") or []),
+            "jots": list(snapshot.get("jots") or []),
+            "nudges": list(snapshot.get("nudges") or []),
         }
         path = self._path(sid)
         path.write_text(json.dumps(record, indent=2), encoding="utf-8")

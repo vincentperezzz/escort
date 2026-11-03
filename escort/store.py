@@ -65,6 +65,7 @@ class MeetingStore:
         self.cards: list[CardRecord] = []
         self.nudges: list[NudgeRecord] = []
         self.snapshots: list[SnapshotRecord] = []
+        self.jots: list[dict[str, str]] = []  # the user's own notes typed during the call
         self.skipped_frames = 0
         self.warnings: list[str] = []
         self.partials: dict[str, str] = {}
@@ -181,6 +182,14 @@ class MeetingStore:
                 item.status = status
             return item
 
+    def add_jot(self, text: str) -> dict[str, str]:
+        """A line the user typed during the call. It is the skeleton of the notes written afterwards."""
+        with self.lock:
+            last = self.utterances[-1].text if self.utterances else ""
+            jot = {"id": new_id("jot"), "text": text.strip()[:500], "at": utc_now(), "after": last[:160]}
+            self.jots.append(jot)
+        return jot
+
     def add_snapshot(self, image: Any, *, caption: str, kind: str) -> SnapshotRecord:
         """Keep a frame for the notes. Oldest visuals go first past MAX_SNAPSHOTS."""
         path = self.save_png(image, "visual")
@@ -245,6 +254,7 @@ class MeetingStore:
             self.cards.clear()
             self.nudges.clear()
             self.snapshots.clear()
+            self.jots.clear()
             self.partials.clear()
             self.warnings.clear()
             self.skipped_frames = 0
@@ -298,6 +308,7 @@ class MeetingStore:
                 "cards": [item.to_dict() for item in self.cards],
                 "nudges": [item.to_dict() for item in self.nudges],
                 "snapshots": [item.to_dict() for item in self.snapshots],
+                "jots": [dict(item) for item in self.jots],
                 "frames": [item.to_dict() for item in self.frames],
                 "skipped_frames": self.skipped_frames,
                 "warnings": list(self.warnings),

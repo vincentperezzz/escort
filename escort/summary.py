@@ -1,10 +1,14 @@
 """Post-meeting summary: Muse Spark when a key is set, a rules recap built from the store otherwise.
 
 Both paths return the same shape:
-    {status, title, bullets: [str], takeaways: [str], decisions: [str], open_questions: [str],
+    {status, title, meeting_type, notes: [{heading, points: [{text, from_you, sub: [str]}]}],
+     bullets: [str], takeaways: [str], decisions: [str], open_questions: [str],
      commitments: [{who, what, due}], conflicts: [{title, section}], generated_at, source, error}
 
-`bullets` are the meeting's highlights; there is no fixed count. Long transcripts are summarised
+`notes` are organized notes: the user's own jots from the call are the
+skeleton (from_you=True, kept in their words), the transcript fills in the detail (from_you=False),
+grouped under one heading per topic in the order discussed, shaped by a template for the meeting
+type. `bullets` are the highlights on top; there is no fixed count. Long transcripts are summarised
 map-reduce style: one "segment notes" call per chunk, then the final summary over those notes.
 """
 
@@ -31,6 +35,8 @@ def empty_summary(status: str = "idle") -> dict[str, Any]:
     return {
         "status": status,
         "title": "",
+        "meeting_type": "",
+        "notes": [],
         "bullets": [],
         "takeaways": [],
         "decisions": [],
@@ -93,9 +99,12 @@ def rules_summary(snapshot: dict[str, Any], *, error: str | None = None) -> dict
     if not conflicts and not commitments and turns:
         bullets.append("No scope conflicts or promises were detected.")
     title = str(snapshot.get("title") or "").strip() or "Meeting summary"
+    jots = [str(item.get("text") or "").strip() for item in snapshot.get("jots") or [] if str(item.get("text") or "").strip()]
+    notes = [{"heading": "Your notes", "points": [{"text": text, "from_you": True, "sub": []} for text in jots]}] if jots else []
     return {
         **empty_summary("ready"),
         "title": title,
+        "notes": notes,
         "bullets": bullets,
         "open_questions": _undated_questions(commitments),
         "commitments": commitments,
@@ -125,6 +134,35 @@ _COMMITMENTS: dict[str, Any] = {
 }
 
 
+MEETING_TYPES = {
+    "client_call": "Client / stakeholder call: requests and scope, concerns, what was agreed, what needs confirming.",
+    "sales_call": "Sales or discovery: their situation, pain points, current tools, budget and timeline, decision makers, objections, next steps.",
+    "standup": "Standup / status: one heading per person (done, next, blockers), then cross-team items.",
+    "one_on_one": "1:1: topics they raised, feedback both ways, growth or concerns, follow-ups.",
+    "project_review": "Project / sprint review: progress per workstream, demos shown, risks and blockers, changes to scope or dates.",
+    "planning": "Planning / design: goals, options weighed with trade-offs, chosen approach, open design questions.",
+    "interview": "Interview: candidate background, strengths, concerns, answers to key questions, recommendation signals.",
+    "workshop": "Workshop / brainstorm: themes, ideas per theme, votes or preferences, what to explore next.",
+    "other": "General: one heading per topic in the order discussed.",
+}
+
+_NOTE_POINT: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"text": {"type": "string"}, "from_you": {"type": "boolean"}, "sub": _STRINGS},
+    "required": ["text", "from_you", "sub"],
+}
+_NOTES: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"heading": {"type": "string"}, "points": {"type": "array", "items": _NOTE_POINT}},
+        "required": ["heading", "points"],
+    },
+}
+
+
 def summary_schema() -> dict[str, Any]:
     return {
         "type": "json_schema",
@@ -135,6 +173,8 @@ def summary_schema() -> dict[str, Any]:
                 "additionalProperties": False,
                 "properties": {
                     "title": {"type": "string"},
+                    "meeting_type": {"type": "string", "enum": list(MEETING_TYPES)},
+                    "notes": _NOTES,
                     "bullets": _STRINGS,
                     "takeaways": _STRINGS,
                     "decisions": _STRINGS,
@@ -150,7 +190,7 @@ def summary_schema() -> dict[str, Any]:
                         },
                     },
                 },
-                "required": ["title", "bullets", "takeaways", "decisions", "open_questions", "commitments", "conflicts"],
+                "required": ["title", "meeting_type", "notes", "bullets", "takeaways", "decisions", "open_questions", "commitments", "conflicts"],
             },
         },
     }
@@ -228,9 +268,25 @@ def _visuals_block(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_TEMPLATES = "\n".join(f"- {key}: {text}" for key, text in MEETING_TYPES.items())
+
 _SYSTEM = (
-    "Summarise a finished client call for the user (Me) in plain, natural English. "
+    "Write the notes and summary of a finished call for the user (Me) in plain, natural English. "
     "title: a short meeting title. "
+    "meeting_type: pick the closest template; it shapes the notes headings:\n"
+    f"{_TEMPLATES}\n"
+    "notes: enhanced meeting notes, the way a great note-taker turns rough jots into clean notes. "
+    "MY NOTES (the user's own jots typed during the call, each with what was being said right before) are the "
+    "skeleton: every jot must appear, in the user's own words, as a point with from_you=true, placed under the topic "
+    "it belongs to, and enriched with sub-points from the transcript (names, numbers, dates, the why). What the user "
+    "chose to jot signals what matters to them, so give those topics the most detail. Then add what the user did not "
+    "jot but matters, as points with from_you=false. Group everything under short, specific headings named after the "
+    "topic itself (e.g. 'RBAC roles for sales reps', never 'Discussion' or 'Topic 1'), in the order the topics came up, "
+    "following the meeting_type template where it fits. Points are terse, scannable fragments, one idea each, with "
+    "sub-points for detail; no filler, no restating the heading. Do not put action items in notes (they go in commitments). "
+    "When there are no jots, write the notes from the transcript alone (all from_you=false). "
+    "As many headings and points as the content warrants; a quick call may have one heading. "
+    "A visual that was shown can be referenced in the point it supports. "
     "bullets: the meeting's highlights, as many as the content genuinely warrants. Let the amount of important "
     "material decide the count, not the meeting's length: a quick call with little to say may need only a few; "
     "a long, dense meeting must keep every real highlight from beginning to end. Never pad a short call, never "
@@ -270,6 +326,7 @@ def build_summary_request(
     visuals = _visuals_block(snapshot)
     text = (
         f"NOTES / SCOPE:\n{notes[:16000] or '(none loaded)'}\n\n"
+        f"{_jots_block(snapshot)}"
         f"{body}\n\n"
         + (f"VISUALS SHOWN (screenshots captured during the call):\n{visuals}\n\n" if visuals else "")
         + f"CARDS ESCORT RAISED LIVE:\n{json.dumps(cards, ensure_ascii=False)[:8000]}"
@@ -281,6 +338,33 @@ def build_summary_request(
         "response_format": summary_schema(),
         "messages": [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": text}],
     }
+
+
+def _jots_block(snapshot: dict[str, Any]) -> str:
+    jots = [item for item in snapshot.get("jots") or [] if str(item.get("text") or "").strip()]
+    if not jots:
+        return "MY NOTES: (none, write the notes from the transcript)\n\n"
+    lines = []
+    for item in jots:
+        context = f"  (right after: \"{item['after']}\")" if item.get("after") else ""
+        lines.append(f"- {item['text']}{context}")
+    return "MY NOTES (jotted by the user during the call, in order):\n" + "\n".join(lines) + "\n\n"
+
+
+def _parse_notes(value: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for topic in value or []:
+        if not isinstance(topic, dict):
+            continue
+        points = [
+            {"text": str(p.get("text") or "").strip(), "from_you": bool(p.get("from_you")), "sub": _strings(p.get("sub"))}
+            for p in topic.get("points") or []
+            if isinstance(p, dict) and str(p.get("text") or "").strip()
+        ]
+        heading = str(topic.get("heading") or "").strip()
+        if heading and points:
+            out.append({"heading": heading, "points": points})
+    return out
 
 
 def build_segment_request(settings: Settings, chunk: str, index: int, total: int) -> dict[str, Any]:
@@ -344,6 +428,8 @@ def parse_summary_response(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Muse summary had no bullets")
     return {
         "title": str(data.get("title") or "").strip(),
+        "meeting_type": str(data.get("meeting_type") or "") if data.get("meeting_type") in MEETING_TYPES else "",
+        "notes": _parse_notes(data.get("notes")),
         "bullets": bullets,
         "takeaways": _strings(data.get("takeaways")),
         "decisions": _strings(data.get("decisions")),
@@ -432,6 +518,9 @@ def generate_summary(
     return {
         **rules,
         "title": parsed["title"] or rules["title"],
+        "meeting_type": parsed["meeting_type"],
+        # The user's jots must never be lost, even if the model returned no notes.
+        "notes": parsed["notes"] or rules["notes"],
         "bullets": parsed["bullets"],
         "takeaways": parsed["takeaways"],
         "decisions": parsed["decisions"],

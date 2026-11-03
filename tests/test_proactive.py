@@ -284,3 +284,69 @@ def test_event_meeting_url_sources():
     assert event_meeting_url({"conferenceData": {"entryPoints": [{"entryPointType": "phone", "uri": "tel:1"}, {"entryPointType": "video", "uri": "https://x.zoom.us/j/1"}]}}) == "https://x.zoom.us/j/1"
     assert event_meeting_url({"description": '<a href="https://teams.microsoft.com/l/meetup-join/19%3a/0?c=1">Join</a>'}) == "https://teams.microsoft.com/l/meetup-join/19%3a/0?c=1"
     assert event_meeting_url({"location": "Room 4"}) == ""
+
+
+def test_minimizing_the_main_window_while_live_brings_the_overlay_back(tmp_path):
+    runtime = demo_runtime(tmp_path)
+    runtime.main_window_minimized()
+    assert runtime.overlay_visible is False  # not live: leave it alone
+    runtime.set_listening(True)
+    try:
+        runtime.set_overlay(visible=False)
+        runtime.main_window_minimized()
+        assert runtime.overlay_visible is True
+    finally:
+        runtime.set_listening(False)
+
+
+def test_parse_drive_link_forms():
+    import pytest
+
+    from escort.context.sources.base import ConnectorSetupError
+    from escort.context.sources.google_drive import parse_drive_link
+
+    fid = "1AbCdEfGhIjKlMnOpQrStUv"
+    assert parse_drive_link(f"https://drive.google.com/drive/folders/{fid}?usp=sharing") == fid
+    assert parse_drive_link(f"https://drive.google.com/drive/u/0/folders/{fid}") == fid
+    assert parse_drive_link(f"https://drive.google.com/file/d/{fid}/view") == fid
+    assert parse_drive_link(f"https://drive.google.com/open?id={fid}") == fid
+    assert parse_drive_link(f"https://docs.google.com/document/d/{fid}/edit") == fid
+    with pytest.raises(ConnectorSetupError):
+        parse_drive_link("https://example.com/folders/1AbCdEfGhIjKlMnOpQrStUv")
+
+
+def test_resolve_folder_link_walks_subfolders_and_skips_unsupported(monkeypatch):
+    from escort.context.sources import google_drive
+
+    class Auth:
+        def require(self, capability):
+            assert capability == "drive_browse"
+
+    root = "rootFolder0001"
+    tree = {
+        root: [
+            {"id": "sub1", "name": "Specs", "mimeType": google_drive.FOLDER_MIME},
+            {"id": "f1", "name": "PRD", "mimeType": google_drive.GOOGLE_DOC},
+            {"id": "f2", "name": "logo.png", "mimeType": "image/png"},
+        ],
+        "sub1": [{"id": "f3", "name": "RBAC.pdf", "mimeType": "application/pdf"}],
+    }
+
+    class Resp:
+        def __init__(self, data):
+            self.data = data
+
+        def json(self):
+            return self.data
+
+    def call(auth, url, params):
+        if url.endswith(f"/{root}"):
+            return Resp({"id": root, "name": "Sales CRM", "mimeType": google_drive.FOLDER_MIME})
+        return Resp({"files": tree[params["q"].split("'")[1]]})
+
+    monkeypatch.setattr(google_drive, "_call", call)
+    result = google_drive.resolve_drive_link(Auth(), f"https://drive.google.com/drive/folders/{root}?usp=sharing")
+    assert result["folder"] == "Sales CRM"
+    assert [h["id"] for h in result["hits"]] == ["f1", "f3"]
+    assert result["hits"][1]["snippet"] == "PDF · Sales CRM/Specs"
+    assert result["skipped"] == 1

@@ -187,6 +187,10 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
         return
     window = webview.create_window("Escort", url, background_color="#efe6d6", **_main_window_create_kwargs(webview))
     runtime.attach_main_window(MainWindow(window))
+    # Minimizing the main window mid-meeting brings the overlay back, so the call is never unwatched.
+    minimized = getattr(getattr(window, "events", None), "minimized", None)
+    if minimized is not None:
+        window.events.minimized += lambda *_args: runtime.main_window_minimized()
     electron = _overlay(webview, window, url, runtime)
     icon = _tray(runtime, window)
     # EscortOverlay.exe registers Ctrl+Shift+E itself; a second registrant would lose it anyway.

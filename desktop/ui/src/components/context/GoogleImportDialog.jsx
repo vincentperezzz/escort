@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { File, FilePdf, FileText, MagnifyingGlass, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
+import { File, FilePdf, FileText, FolderSimple, LinkSimple, MagnifyingGlass, PresentationChart, ShieldCheck, Table } from "@phosphor-icons/react";
 import { GoogleDriveLogo } from "../BrandIcons.jsx";
 import ConnectAccounts from "../ConnectAccounts.jsx";
 import { Button } from "../ui.jsx";
@@ -10,6 +10,9 @@ const GOOGLE_DOC = "application/vnd.google-apps.document";
 const GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet";
 const GOOGLE_SLIDES = "application/vnd.google-apps.presentation";
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** A pasted drive.google.com / docs.google.com link instead of a search. */
+const isDriveLink = (text) => /^(https?:\/\/)?(drive|docs)\.google\.com\//i.test(text.trim());
 
 function mimeIcon(mime) {
   if (mime === GOOGLE_DOC || mime === "text/plain" || mime === "text/markdown" || mime === "text/x-markdown") {
@@ -33,6 +36,7 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
   const [searchBusy, setSearchBusy] = useState(false);
   const [error, setError] = useState("");
   const [consentBusy, setConsentBusy] = useState(false);
+  const [fromLink, setFromLink] = useState(null); // { folder, skipped, truncated } after a pasted link
 
   const loadStatus = useCallback(async () => {
     try {
@@ -58,9 +62,19 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
     if (!connected || !driveReady) return;
     setSearchBusy(true);
     setError("");
+    setFromLink(null);
     try {
-      const data = await post("/api/context/search", { source: "google", query: query.trim() });
-      setHits(data.hits || []);
+      if (isDriveLink(query)) {
+        // A file or folder link: list what is behind it and pre-select all of it.
+        const data = await post("/api/context/drive-link", { link: query.trim() });
+        const rows = data.hits || [];
+        setHits(rows);
+        setSelected(new Set(rows.map((row) => row.id)));
+        setFromLink({ folder: data.folder, skipped: data.skipped || 0, truncated: Boolean(data.truncated) });
+      } else {
+        const data = await post("/api/context/search", { source: "google", query: query.trim() });
+        setHits(data.hits || []);
+      }
       setSearched(true);
     } catch (err) {
       setError(err.message || "Search failed.");
@@ -151,7 +165,7 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
   return (
     <ContextDialog
       title="Import from Google Drive"
-      description="Search files in your Drive, then import Docs, Sheets, Slides, PDFs, and text."
+      description="Search your Drive, or paste a file or folder link, then import Docs, Sheets, Slides, PDFs, and text."
       onClose={onClose}
       wide
       footer={
@@ -203,17 +217,21 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
       ) : (
         <>
           <form className="field flex items-center gap-2 py-1 pl-4 pr-1" onSubmit={runSearch}>
-            <MagnifyingGlass size={16} className="shrink-0 text-faint" aria-hidden />
+            {isDriveLink(query) ? (
+              <LinkSimple size={16} className="shrink-0 text-faint" aria-hidden />
+            ) : (
+              <MagnifyingGlass size={16} className="shrink-0 text-faint" aria-hidden />
+            )}
             <input
               className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              aria-label="Search Google Drive"
-              placeholder="Search Drive files"
+              aria-label="Search Google Drive or paste a link"
+              placeholder="Search Drive, or paste a file or folder link"
               autoFocus
             />
             <Button type="submit" size="sm" disabled={searchBusy}>
-              {searchBusy ? "Searching…" : "Search"}
+              {searchBusy ? (isDriveLink(query) ? "Opening…" : "Searching…") : isDriveLink(query) ? "Open link" : "Search"}
             </Button>
           </form>
           {error ? (
@@ -221,9 +239,21 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
               {error}
             </p>
           ) : null}
+          {fromLink ? (
+            <p className="mt-3 flex items-center gap-2 text-xs text-muted" role="status">
+              {fromLink.folder ? <FolderSimple size={14} aria-hidden /> : <LinkSimple size={14} aria-hidden />}
+              {fromLink.folder
+                ? `${hits.length} file${hits.length === 1 ? "" : "s"} in “${fromLink.folder}”, all selected.`
+                : "The linked file is selected."}
+              {fromLink.skipped ? ` ${fromLink.skipped} unsupported skipped.` : ""}
+              {fromLink.truncated ? " Showing the first 40." : ""}
+            </p>
+          ) : null}
           <ul className="mt-4 max-h-64 space-y-1 overflow-y-auto scroll-thin" aria-label="Google Drive search results">
             {searched && hits.length === 0 ? (
-              <li className="rounded-xl px-3 py-6 text-center text-sm text-muted">No files matched. Try a different search.</li>
+              <li className="rounded-xl px-3 py-6 text-center text-sm text-muted">
+                {fromLink ? "No importable files behind that link." : "No files matched. Try a different search."}
+              </li>
             ) : (
               hits.map((hit) => {
                 const MimeIcon = mimeIcon(hit.mimeType);

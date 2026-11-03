@@ -115,7 +115,16 @@ class MuseFileTranscriber:
         return turns
 
 
+_DEAD = object()  # queued by the receiver when the socket is gone, so the sender stops too
+
+
 class MuseRealtimeSession:
+    """One streaming ASR socket on its own thread and event loop.
+
+    The server may drop the socket (e.g. "Ingress audio slower than real-time"). Then `alive` turns
+    False and `write` becomes a no-op instead of raising "Event loop is closed"; the caller reconnects.
+    """
+
     def __init__(
         self,
         settings: Settings,
@@ -144,15 +153,25 @@ class MuseRealtimeSession:
         if self.error:
             raise self.error
 
-    def write(self, pcm: bytes) -> None:
-        if self._loop is None or self._queue is None:
-            return
-        self._loop.call_soon_threadsafe(self._queue.put_nowait, pcm)
+    @property
+    def alive(self) -> bool:
+        return self._thread.is_alive() and self._loop is not None and not self._loop.is_closed()
+
+    def write(self, pcm: bytes) -> bool:
+        if not self.alive:
+            return False
+        try:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, pcm)
+        except RuntimeError:  # the loop closed between the check and the call
+            return False
+        return True
 
     def close(self) -> None:
-        if self._loop is None or self._queue is None:
-            return
-        self._loop.call_soon_threadsafe(self._queue.put_nowait, None)
+        if self.alive:
+            try:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, None)
+            except RuntimeError:
+                pass
         self._thread.join(timeout=5)
 
     def _run(self) -> None:
@@ -189,6 +208,8 @@ class MuseRealtimeSession:
             try:
                 while True:
                     item = await self._queue.get()
+                    if item is _DEAD:
+                        break
                     if item is None:
                         await ws.send(json.dumps(end_stream_message()))
                         break
@@ -199,15 +220,18 @@ class MuseRealtimeSession:
                     receiver.cancel()
 
     async def _receive(self, ws, reducer: AsrReducer) -> None:
-        async for message in ws:
-            if isinstance(message, bytes):
-                continue
-            event = json.loads(message)
-            if event.get("type") == "transcript" and not event.get("final") and self.on_partial:
-                self.on_partial(self.speaker, event.get("transcript") or "")
-            turn = reducer.apply(event)
-            if turn and turn.text.strip():
-                self.on_final(turn)
+        try:
+            async for message in ws:
+                if isinstance(message, bytes):
+                    continue
+                event = json.loads(message)
+                if event.get("type") == "transcript" and not event.get("final") and self.on_partial:
+                    self.on_partial(self.speaker, event.get("transcript") or "")
+                turn = reducer.apply(event)
+                if turn and turn.text.strip():
+                    self.on_final(turn)
+        finally:
+            self._queue.put_nowait(_DEAD)
 
 
 def wav_pcm_24k(path: Path) -> bytes:
