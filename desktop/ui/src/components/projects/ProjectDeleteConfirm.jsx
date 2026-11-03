@@ -64,7 +64,7 @@ export default function ProjectDeleteConfirm({ project, onClose, onDeleted, refr
         aria-labelledby="project-delete-title"
         aria-describedby="project-delete-desc"
         tabIndex={-1}
-        className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-line-strong bg-[#14151c] shadow-[var(--glow)] fade-in"
+        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-line-strong bg-[#14151c] shadow-[var(--glow)] fade-in"
       >
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/[0.08] p-5">
           <div className="min-w-0">

@@ -53,6 +53,7 @@ const META = {
 export default function ConnectAccounts({ onChange, compact = false, providers: providerFilter = null }) {
   const c = useConnectors({ onChange });
   const allowed = providerFilter?.length ? new Set(providerFilter) : null;
+  const dialogVariant = Boolean(allowed?.size);
   const list = (c.providers || []).filter((p) => META[p.id] && (!allowed || allowed.has(p.id)));
   const skeletonCount = allowed ? allowed.size : 2;
   const gridCols = list.length > 1 || skeletonCount > 1 ? "md:grid-cols-2" : "grid-cols-1";
@@ -81,7 +82,7 @@ export default function ConnectAccounts({ onChange, compact = false, providers: 
       ) : (
         <div className={`grid items-stretch gap-3 ${gridCols}`}>
           {list.map((p) => (
-            <ProviderCard key={p.id} provider={p} ctl={c} />
+            <ProviderCard key={p.id} provider={p} ctl={c} dialogVariant={dialogVariant} />
           ))}
         </div>
       )}
@@ -89,7 +90,7 @@ export default function ConnectAccounts({ onChange, compact = false, providers: 
   );
 }
 
-function ProviderCard({ provider, ctl }) {
+function ProviderCard({ provider, ctl, dialogVariant = false }) {
   const meta = META[provider.id];
   const { Mark } = meta;
   const busy = ctl.busy[provider.id];
@@ -97,6 +98,7 @@ function ProviderCard({ provider, ctl }) {
   const authUrl = ctl.authUrls[provider.id];
   const [token, setToken] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [howOpen, setHowOpen] = useState(false);
   const demo = provider.mode === "mock";
   const isGoogle = provider.id === "google";
   const reconnect = !isGoogle && !provider.connected && Boolean(provider.needs_reconnect);
@@ -112,7 +114,7 @@ function ProviderCard({ provider, ctl }) {
   const live = provider.connected && !demo;
 
   return (
-    <article className="flex h-full flex-col rounded-[22px] bg-white/[0.025] p-5 hairline">
+    <article className={`flex flex-col rounded-[22px] bg-white/[0.025] hairline ${dialogVariant ? "p-4" : "h-full p-5"}`}>
       <header className="flex min-h-10 items-start gap-3">
         {isGoogle ? (
           <BrandTile>
@@ -134,17 +136,18 @@ function ProviderCard({ provider, ctl }) {
         )}
       </header>
 
-      {/* Status row: one line in every state so both cards line up below it. */}
-      <p className="mt-4 flex min-h-6 items-center gap-2 text-sm">
+      <p className={`flex items-center gap-2 text-sm ${dialogVariant ? "mt-3" : "mt-4 min-h-6"}`}>
         {provider.connected ? (
           <>
             <CheckCircle size={18} weight="regular" className={demo ? "text-warn" : "text-commit"} aria-hidden />
             <span className="min-w-0 truncate font-medium">{provider.account || (isGoogle ? "Account connected" : "Notion workspace")}</span>
           </>
         ) : reconnect ? (
-          <span className="text-warn">
+          <span className={dialogVariant ? "line-clamp-2 text-warn" : "text-warn"}>
             Notion ended Escort's access to {provider.reconnect_account || "your workspace"}. Your page picks are kept.
           </span>
+        ) : dialogVariant ? (
+          <span className="min-w-0 truncate text-muted">{meta.blurb}</span>
         ) : (
           <span className="text-muted">{meta.blurb}</span>
         )}
@@ -160,6 +163,35 @@ function ProviderCard({ provider, ctl }) {
           ) : null}
           {isGoogle && live && provider.needs_docs_consent ? <DocsConsent provider={provider} ctl={ctl} /> : null}
           {!isGoogle && live ? <NotionAccess provider={provider} ctl={ctl} /> : null}
+        </div>
+      ) : dialogVariant ? (
+        <div className="mt-3">
+          {needsCredentials ? <GoogleCredentials provider={provider} ctl={ctl} /> : null}
+          {!needsCredentials ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={howOpen}
+                onClick={() => setHowOpen((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-ink"
+              >
+                <CaretDown size={13} className={`transition-transform ${howOpen ? "rotate-180" : ""}`} aria-hidden />
+                How this works
+              </button>
+              {howOpen ? (
+                <ol className="mt-2.5 space-y-2">
+                  {steps.map((text, i) => (
+                    <li key={text} className="flex gap-3 text-sm leading-snug">
+                      <span className="mono grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/[0.06] text-[11px] text-muted">
+                        {i + 1}
+                      </span>
+                      <span className="text-ink/85">{text}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+            </>
+          ) : null}
         </div>
       ) : (
         <div>
@@ -181,47 +213,55 @@ function ProviderCard({ provider, ctl }) {
 
       {/* Capability row: same slot in both cards. Connected, it fills the card so both boxes share top
           and bottom edges; otherwise it sits just above the footer. */}
-      <div className={provider.connected ? "flex flex-1 flex-col pt-4 [&>*]:flex-1" : "mt-auto pt-4"}>
-        {isGoogle ? <SaveNotes provider={provider} ctl={ctl} live={live} /> : <NotionSaveNotes provider={provider} ctl={ctl} live={live} />}
-      </div>
+      {dialogVariant ? null : (
+        <div className={provider.connected ? "flex flex-1 flex-col pt-4 [&>*]:flex-1" : "mt-auto pt-4"}>
+          {isGoogle ? <SaveNotes provider={provider} ctl={ctl} live={live} /> : <NotionSaveNotes provider={provider} ctl={ctl} live={live} />}
+        </div>
+      )}
 
-      <footer className="mt-4 flex min-h-8 flex-wrap items-center justify-between gap-3">
+      <footer
+        className={
+          dialogVariant
+            ? "mt-4 flex flex-wrap items-center gap-x-3 gap-y-2"
+            : "mt-4 flex min-h-8 flex-wrap items-center justify-between gap-3"
+        }
+      >
         {provider.connected ? (
           <Button variant="dangerGhost" size="sm" disabled={busy === "disconnecting"} onClick={() => ctl.disconnect(provider.id)}>
             {busy === "disconnecting" ? "Disconnecting…" : `Disconnect ${meta.name}`}
           </Button>
         ) : isGoogle ? (
           <>
-            <Button variant="primary" disabled={Boolean(busy) || needsCredentials} onClick={ctl.connectGoogle}>
+            <Button variant="primary" size={dialogVariant ? "sm" : undefined} disabled={Boolean(busy) || needsCredentials} onClick={ctl.connectGoogle}>
               <GoogleLogo size={16} />
               {busy === "connecting" ? "Opening browser…" : busy === "waiting" ? "Waiting for Google…" : "Connect Google"}
             </Button>
             {busy === "waiting" ? (
-              <div className="flex items-center gap-3 text-xs">
+              <>
                 {authUrl ? (
-                  <button type="button" className={`inline-flex items-center gap-1 ${LINK}`} onClick={ctl.connectGoogle}>
+                  <button type="button" className={`inline-flex items-center gap-1 text-xs ${LINK}`} onClick={ctl.connectGoogle}>
                     Open sign-in again <ArrowSquareOut size={14} aria-hidden />
                   </button>
                 ) : null}
-                <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
+                <button type="button" className="text-xs font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
                   Cancel
                 </button>
-              </div>
+              </>
             ) : null}
           </>
         ) : (
           <>
-            <Button variant="primary" disabled={busy === "connecting"} onClick={ctl.connectNotionOAuth}>
+            <Button variant="primary" size={dialogVariant ? "sm" : undefined} disabled={busy === "connecting"} onClick={ctl.connectNotionOAuth}>
               <NotionLogo size={16} />
               {busy === "connecting"
                 ? "Opening Notion…"
                 : busy === "waiting"
-                  ? "Open Notion again"
+                  ? "Waiting for Notion…"
                   : reconnect
                     ? "Reconnect Notion"
                     : "Connect Notion"}
             </Button>
-            {busy === "waiting" ? (
+            {busy === "waiting" && !dialogVariant ? (
               <div className="flex items-center gap-3 text-xs">
                 <span className="text-muted">Waiting for Notion…</span>
                 <button type="button" className="font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
@@ -229,9 +269,14 @@ function ProviderCard({ provider, ctl }) {
                 </button>
               </div>
             ) : null}
+            {busy === "waiting" && dialogVariant ? (
+              <button type="button" className="text-xs font-medium text-muted hover:text-ink" onClick={() => ctl.cancelWait(provider.id)}>
+                Cancel
+              </button>
+            ) : null}
           </>
         )}
-        {(isGoogle && provider.configured) || (!isGoogle && !provider.connected && busy !== "waiting") ? (
+        {!dialogVariant && ((isGoogle && provider.configured) || (!isGoogle && !provider.connected && busy !== "waiting")) ? (
           <button
             type="button"
             aria-expanded={advancedOpen}
@@ -242,9 +287,20 @@ function ProviderCard({ provider, ctl }) {
             Advanced
           </button>
         ) : null}
+        {dialogVariant && isGoogle && provider.configured ? (
+          <button
+            type="button"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-ink"
+          >
+            <CaretDown size={13} className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`} aria-hidden />
+            Advanced
+          </button>
+        ) : null}
       </footer>
       {isGoogle && provider.configured && advancedOpen ? <GoogleCredentials provider={provider} ctl={ctl} advanced /> : null}
-      {!isGoogle && !provider.connected && advancedOpen ? (
+      {!dialogVariant && !isGoogle && !provider.connected && advancedOpen ? (
         <div className="mt-3 rounded-2xl bg-white/[0.03] p-4 hairline" aria-label="Advanced: Notion integration token">
           <p className="text-xs font-medium">Use an integration token instead</p>
           <p className="mt-1 text-xs leading-relaxed text-muted text-pretty">
@@ -271,7 +327,7 @@ function ProviderCard({ provider, ctl }) {
         </div>
       ) : null}
 
-      {busy === "waiting" && !provider.connected ? (
+      {busy === "waiting" && !provider.connected && !dialogVariant ? (
         <div className="mt-3 space-y-2 rounded-2xl bg-white/[0.03] p-3.5 hairline" role="status">
           <p className="text-xs leading-relaxed text-muted">
             {isGoogle

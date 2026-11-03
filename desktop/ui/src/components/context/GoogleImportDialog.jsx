@@ -153,7 +153,7 @@ export default function GoogleImportDialog({ onClose, onImported, refresh, onCon
       title="Import from Google Drive"
       description="Search files in your Drive, then import Docs, Sheets, Slides, PDFs, and text."
       onClose={onClose}
-      widthClass="max-w-xl"
+      wide
       footer={
         connected && driveReady ? (
           <>

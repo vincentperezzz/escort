@@ -136,6 +136,48 @@ class MainWindow:
                 log.debug("Could not raise the main window: %s", exc)
 
 
+def _primary_work_area(webview_module=None):
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+                return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+        except Exception:
+            pass
+    if webview_module is not None:
+        try:
+            screens = webview_module.screens
+            if screens:
+                screen = screens[0]
+                if isinstance(screen, dict):
+                    return screen.get("x", 0), screen.get("y", 0), screen.get("width", 1920), screen.get("height", 1080)
+                return (
+                    getattr(screen, "x", 0),
+                    getattr(screen, "y", 0),
+                    getattr(screen, "width", 1920),
+                    getattr(screen, "height", 1080),
+                )
+        except Exception:
+            pass
+    return 0, 0, 1920, 1080
+
+
+def _main_window_create_kwargs(webview_module):
+    margin = 40
+    want_w, want_h = 1280, 860
+    work_left, work_top, work_w, work_h = _primary_work_area(webview_module)
+    max_w = max(margin * 2, work_w - 2 * margin)
+    max_h = max(margin * 2, work_h - 2 * margin)
+    width = min(want_w, max_w)
+    height = min(want_h, max_h)
+    x = work_left + max(0, (work_w - width) // 2)
+    y = work_top + max(0, (work_h - height) // 2)
+    return {"width": width, "height": height, "x": x, "y": y, "min_size": (980, 660), "resizable": True}
+
+
 def _open_window(url: str, runtime: DesktopRuntime) -> None:
     try:
         import webview
@@ -143,7 +185,7 @@ def _open_window(url: str, runtime: DesktopRuntime) -> None:
         print(url, flush=True)
         threading.Event().wait()
         return
-    window = webview.create_window("Escort", url, width=1120, height=780, background_color="#efe6d6")
+    window = webview.create_window("Escort", url, background_color="#efe6d6", **_main_window_create_kwargs(webview))
     runtime.attach_main_window(MainWindow(window))
     electron = _overlay(webview, window, url, runtime)
     icon = _tray(runtime, window)

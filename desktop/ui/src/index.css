@@ -488,3 +488,22 @@ html.overlay-mode * {
 @keyframes think-pulse { 0%,100% { opacity: .5; transform: scale(.92); } 50% { opacity: 1; transform: scale(1.08); } }
 .thinking-pulse { animation: think-pulse 1.6s var(--ease) infinite; }
 @media (prefers-reduced-motion: reduce) { .thinking-pulse { animation: none; } }
+
+.escort-dialog-panel {
+  width: min(560px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+}
+
+.escort-dialog-panel--wide {
+  width: min(576px, calc(100vw - 2rem));
+}
+
+.escort-dialog-body {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.escort-dialog-body:hover,
+.escort-dialog-body:focus-within {
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}

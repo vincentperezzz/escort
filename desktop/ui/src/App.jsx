@@ -72,7 +72,11 @@ function Shell({ route }) {
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await api("/api/status"));
+      const next = await api("/api/status");
+      setStatus((prev) => {
+        if (prev != null && JSON.stringify(prev) === JSON.stringify(next)) return prev;
+        return next;
+      });
       setError("");
     } catch (err) {
       setError(err.message || "Escort is quiet");

@@ -109,7 +109,7 @@ export default function NotionImportDialog({ onClose, onImported, onConnectAccou
       title="Import from Notion"
       description="Search pages Escort can access, then import the ones you need."
       onClose={onClose}
-      widthClass="max-w-xl"
+      wide
       footer={
         connected ? (
           <>

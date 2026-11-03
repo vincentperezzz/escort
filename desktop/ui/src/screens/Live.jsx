@@ -31,7 +31,10 @@ export default function Live({ status, refresh, setListening, go, liveSub, justE
     );
   }
 
-  if (route.view === "recap") {
+  const sessionRecap = route.view === "recap" && route.sessionId;
+  const postMeetingRecap = route.view === "recap" && !route.sessionId;
+
+  if (postMeetingRecap) {
     const showStartAnother = justEndedRecap && !route.sessionId;
     return (
       <RecapPanel
@@ -54,14 +57,39 @@ export default function Live({ status, refresh, setListening, go, liveSub, justE
   }
 
   return (
-    <LiveIdle
-      status={status}
-      setListening={setListening}
-      go={go}
-      busy={busy}
-      setBusy={setBusy}
-      onOpenSession={(id) => go("live", liveRecapHash(id))}
-    />
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        className={sessionRecap ? "pointer-events-none absolute inset-0 flex min-h-0 flex-col overflow-hidden opacity-0" : "flex min-h-0 min-w-0 flex-1 flex-col"}
+        aria-hidden={sessionRecap ? true : undefined}
+      >
+        <LiveIdle
+          status={status}
+          setListening={setListening}
+          go={go}
+          busy={busy}
+          setBusy={setBusy}
+          onOpenSession={(id) => go("live", liveRecapHash(id))}
+        />
+      </div>
+      {sessionRecap ? (
+        <RecapPanel
+          status={status}
+          refresh={refresh}
+          sessionId={route.sessionId}
+          tab={route.tab}
+          go={go}
+          showStartAnother={false}
+          onStartAnother={() => {
+            onClearJustEndedRecap?.();
+            go("live");
+          }}
+          onBack={() => {
+            onClearJustEndedRecap?.();
+            go("live");
+          }}
+        />
+      ) : null}
+    </div>
   );
 }
 

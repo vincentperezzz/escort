@@ -1,42 +1,86 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, CalendarBlank, Play } from "@phosphor-icons/react";
 import { Bezel, Button, Empty, WaveBars } from "../ui.jsx";
 import { api, formatEventWhen, post, relativeStart } from "../../lib/api.js";
 import { sessionDurationLabel } from "./parseLiveRoute.js";
+
+function sessionsFingerprint(list) {
+  if (!Array.isArray(list)) return "";
+  return list.map((s) => `${s.id}\0${s.ended_at ?? ""}`).join("\n");
+}
 
 export default function LiveIdle({ status, setListening, go, onOpenSession, busy, setBusy }) {
   const ctx = status?.context || {};
   const upcoming = ctx.upcoming || [];
   const nextEvent = upcoming[0];
   const projectId = status?.active_project?.id;
-  const [sessions, setSessions] = useState(null);
+  const listening = Boolean(status?.listening);
+  const [sessions, setSessions] = useState([]);
+  const [showSkeleton, setShowSkeleton] = useState(false);
   const [loadErr, setLoadErr] = useState("");
+  const cacheRef = useRef(Object.create(null));
+  const fetchGenRef = useRef(0);
+  const prevListeningRef = useRef(undefined);
+  const prevProjectRef = useRef(undefined);
 
   useEffect(() => {
-    let alive = true;
-    if (!projectId) {
+    const ac = new AbortController();
+    const pid = projectId;
+    const gen = ++fetchGenRef.current;
+
+    if (!pid) {
       setSessions([]);
-      return undefined;
+      setShowSkeleton(false);
+      prevProjectRef.current = pid;
+      prevListeningRef.current = listening;
+      return () => ac.abort();
     }
-    setSessions(null);
-    api(`/api/sessions?project_id=${encodeURIComponent(projectId)}`)
+
+    const projectChanged = prevProjectRef.current !== pid;
+    const meetingEnded = prevListeningRef.current === true && listening === false;
+    prevProjectRef.current = pid;
+    prevListeningRef.current = listening;
+
+    if (!projectChanged && !meetingEnded) {
+      return () => ac.abort();
+    }
+
+    if (projectChanged) {
+      const cached = cacheRef.current[pid];
+      if (cached) {
+        setSessions(cached);
+        setShowSkeleton(false);
+      } else {
+        setSessions([]);
+        setShowSkeleton(true);
+      }
+    }
+
+    setLoadErr("");
+    api(`/api/sessions?project_id=${encodeURIComponent(pid)}`, { signal: ac.signal })
       .then((d) => {
-        if (alive) setSessions(Array.isArray(d?.sessions) ? d.sessions : []);
+        if (gen !== fetchGenRef.current || pid !== prevProjectRef.current) return;
+        const list = Array.isArray(d?.sessions) ? d.sessions : [];
+        cacheRef.current[pid] = list;
+        setSessions((prev) => (sessionsFingerprint(prev) === sessionsFingerprint(list) ? prev : list));
+        setShowSkeleton(false);
       })
       .catch((err) => {
-        if (!alive) return;
+        if (err.name === "AbortError") return;
+        if (gen !== fetchGenRef.current || pid !== prevProjectRef.current) return;
         if (err.status === 404) {
-          const fallback = Array.isArray(status?.sessions) ? status.sessions : [];
-          setSessions(fallback);
+          const fallback = [];
+          cacheRef.current[pid] = fallback;
+          setSessions((prev) => (sessionsFingerprint(prev) === sessionsFingerprint(fallback) ? prev : fallback));
         } else {
-          setSessions([]);
+          setSessions((prev) => (projectChanged && !cacheRef.current[pid] ? [] : prev));
           setLoadErr("");
         }
+        setShowSkeleton(false);
       });
-    return () => {
-      alive = false;
-    };
-  }, [projectId, status?.sessions, status?.listening]);
+
+    return () => ac.abort();
+  }, [projectId, listening]);
 
   async function goLive() {
     setBusy(true);
@@ -56,6 +100,8 @@ export default function LiveIdle({ status, setListening, go, onOpenSession, busy
       setBusy(false);
     }
   }
+
+  const listMinH = showSkeleton ? "min-h-[2.5rem]" : sessions.length ? "min-h-[4rem]" : "min-h-[6rem]";
 
   return (
     <div className="scroll-thin mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-auto px-4 pb-16 pt-10 md:px-10 md:pt-14">
@@ -95,9 +141,9 @@ export default function LiveIdle({ status, setListening, go, onOpenSession, busy
         </Bezel>
       ) : null}
 
-      <div className="mt-10">
+      <div className={`mt-10 ${listMinH}`}>
         <h2 className="text-[13px] font-medium text-muted">Past sessions</h2>
-        {sessions === null ? (
+        {showSkeleton ? (
           <p className="mt-4 text-[13px] text-faint">Loading sessions…</p>
         ) : sessions.length === 0 ? (
           <Empty className="mt-4" title="No sessions yet" body="When you finish a live call, its recap shows up here for this project." />
