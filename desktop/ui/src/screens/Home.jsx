@@ -31,7 +31,14 @@ export default function Home({ status, refresh, go, setListening }) {
     <div className="mx-auto max-w-6xl">
       <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
         <Hero className="rise md:col-span-8" listening={listening} elapsed={elapsed} overlay={overlay} toggle={toggle} starting={starting} disabled={!status} go={go} />
-        <NextEvent className="rise md:col-span-4" event={events[0]} ctx={ctx} refresh={refresh} go={go} />
+        <NextEvent
+          className="rise md:col-span-4"
+          event={events[0]}
+          googleConnected={Boolean((status?.connectors?.providers || []).find((p) => p.id === "google")?.connected)}
+          projectName={status?.active_project?.name}
+          refresh={refresh}
+          go={go}
+        />
         <PrepChat className="rise md:col-span-5" go={go} />
         <Connections className="rise md:col-span-4" go={go} />
         <LastCall className="rise md:col-span-3" status={status} />
@@ -112,8 +119,7 @@ function Hero({ className, listening, elapsed, overlay, toggle, starting, disabl
   );
 }
 
-function NextEvent({ event, ctx, refresh, go, className }) {
-  const items = ctx.items || [];
+function NextEvent({ event, googleConnected, projectName, refresh, go, className }) {
   const [busy, setBusy] = useState(false);
   const when = event ? relativeStart(event.start) : "";
   const attendees = Array.isArray(event?.attendees) ? event.attendees.filter(Boolean) : [];
@@ -146,19 +152,26 @@ function NextEvent({ event, ctx, refresh, go, className }) {
       ) : (
         <>
           <h2 className="mt-6 text-[19px] font-medium leading-snug tracking-[-0.02em]">Nothing on the calendar</h2>
-          <p className="mt-1.5 text-[13px] leading-relaxed text-muted">Connect Google to see upcoming calls here.</p>
+          <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
+            {googleConnected
+              ? `No upcoming calls are linked to ${projectName && projectName !== "General" ? projectName : "this project"} yet.`
+              : "Connect Google to see upcoming calls here."}
+          </p>
         </>
       )}
       <div className="mt-auto pt-6">
-        {!items.length ? <p className="text-[12.5px] text-faint">No context loaded yet</p> : null}
         {event ? (
           <button type="button" onClick={review} disabled={busy} className="press mt-4 inline-flex items-center gap-1.5 text-[13px] font-medium text-[#c6bfff] hover:text-white disabled:opacity-50">
             {busy ? "Matching…" : "Review prep"}
             <ArrowUpRight size={14} aria-hidden />
           </button>
+        ) : googleConnected ? (
+          <Button variant="ghost" size="sm" className="mt-3 -ml-3.5" onClick={() => go("context")}>
+            Link a meeting
+          </Button>
         ) : (
           <Button variant="ghost" size="sm" className="mt-3 -ml-3.5" onClick={() => go("settings", "connections")}>
-            Connect
+            Connect Google
           </Button>
         )}
       </div>
