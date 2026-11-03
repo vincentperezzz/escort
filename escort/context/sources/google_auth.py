@@ -47,11 +47,12 @@ DOCS_READ_SCOPE = _SCOPE_BASE + "documents.readonly"
 SHEETS_READ_SCOPE = _SCOPE_BASE + "spreadsheets.readonly"
 SLIDES_READ_SCOPE = _SCOPE_BASE + "presentations.readonly"
 DRIVE_FILE_SCOPE = _SCOPE_BASE + "drive.file"
+DRIVE_READONLY_SCOPE = _SCOPE_BASE + "drive.readonly"
 DOCS_WRITE_SCOPE = _SCOPE_BASE + "documents"
-# Base sign-in: both are "sensitive", never "restricted" (no Drive-wide read, no security assessment).
 SCOPES = (
     _SCOPE_BASE + "calendar.readonly",
     DOCS_READ_SCOPE,
+    DRIVE_READONLY_SCOPE,
 )
 # Optional "Save notes to Drive": requested incrementally, only when the user turns it on.
 # drive.file only reaches files Escort created (or the user picked); never the full "drive" scope.
@@ -60,19 +61,20 @@ WRITE_SCOPES = (DRIVE_FILE_SCOPE, DOCS_WRITE_SCOPE)
 SHEETS_SCOPES = (SHEETS_READ_SCOPE,)
 SLIDES_SCOPES = (SLIDES_READ_SCOPE,)
 PICKER_SCOPES = (DRIVE_FILE_SCOPE,)
-# capability -> (scopes to request, scopes any one of which already allows it)
+DRIVE_BROWSE_SCOPES = (DRIVE_READONLY_SCOPE,)
 CAPABILITIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
     "docs": (SCOPES, frozenset({DOCS_READ_SCOPE, DOCS_WRITE_SCOPE})),
     "sheets": (SHEETS_SCOPES, frozenset({SHEETS_READ_SCOPE, _SCOPE_BASE + "spreadsheets"})),
     "slides": (SLIDES_SCOPES, frozenset({SLIDES_READ_SCOPE, _SCOPE_BASE + "presentations"})),
-    "drive_files": (PICKER_SCOPES, frozenset({DRIVE_FILE_SCOPE})),
+    "drive_browse": (DRIVE_BROWSE_SCOPES, frozenset({DRIVE_READONLY_SCOPE, DRIVE_FILE_SCOPE})),
+    "drive_files": (DRIVE_BROWSE_SCOPES, frozenset({DRIVE_READONLY_SCOPE, DRIVE_FILE_SCOPE})),
 }
-# What each capability's reconnect button says, and the error code a missing grant raises.
 CAPABILITY_LABELS = {
     "docs": ("Allow Docs access", "read Google Docs", "needs_docs_consent"),
     "sheets": ("Allow Sheets access", "read Google Sheets", "needs_sheets_consent"),
     "slides": ("Allow Slides access", "read Google Slides", "needs_slides_consent"),
-    "drive_files": ("Allow Drive file picking", "open the Drive files you pick", "needs_drive_consent"),
+    "drive_browse": ("Allow Drive access", "browse and import from Google Drive", "needs_drive_consent"),
+    "drive_files": ("Allow Drive access", "browse and import from Google Drive", "needs_drive_consent"),
 }
 REVOKE_HELP_URL = "https://myaccount.google.com/permissions"
 API_LIBRARY_URL = "https://console.cloud.google.com/apis/library/{service}"
@@ -85,7 +87,12 @@ _API_NAMES = {
     "picker.googleapis.com": "Google Picker API",
 }
 # API host -> capability whose scope a 403 "insufficient scopes" on a read means is missing.
-_READ_HOSTS = {"docs.googleapis.com": "docs", "sheets.googleapis.com": "sheets", "slides.googleapis.com": "slides"}
+_READ_HOSTS = {
+    "docs.googleapis.com": "docs",
+    "sheets.googleapis.com": "sheets",
+    "slides.googleapis.com": "slides",
+    "drive.googleapis.com": "drive_browse",
+}
 
 
 def consent_error(capability: str) -> ConnectorScopeError:
@@ -194,7 +201,6 @@ class GoogleAuth:
         return self._read_client_file(self._user_path())
 
     def credential_source(self) -> str | None:
-        """Where the client credentials come from: env > saved Setup > per-user file > bundled file."""
         if (os.environ.get("ESCORT_GOOGLE_CLIENT_ID") or "").strip():
             return "env"
         if (self._client_id_getter() or "").strip():
@@ -206,18 +212,17 @@ class GoogleAuth:
         return None
 
     def client_id(self) -> str | None:
-        source = self.credential_source()
-        if source == "env":
-            value = os.environ.get("ESCORT_GOOGLE_CLIENT_ID", "")
-        elif source == "setup":
-            value = self._client_id_getter() or ""
-        elif source == "user_file":
-            value = self._user_file()[0]
-        elif source == "bundled":
-            value = self._bundled()[0]
-        else:
-            value = ""
-        return value.strip() or None
+        env_id = (os.environ.get("ESCORT_GOOGLE_CLIENT_ID") or "").strip()
+        if env_id:
+            return env_id
+        setup_id = (self._client_id_getter() or "").strip()
+        if setup_id:
+            return setup_id
+        user_id = self._user_file()[0]
+        if user_id:
+            return user_id
+        bundled_id = self._bundled()[0]
+        return bundled_id or None
 
     def client_secret(self) -> str | None:
         # The secret always comes from the same source as the id, so two apps never get mixed.
@@ -469,7 +474,7 @@ class GoogleAuth:
             return 200, _page("Note saving was not allowed", "Escort stays read-only. You can close this tab and try again from Escort.")
         if notes_flow:
             return 200, _page("Escort can save notes to Google Docs", "You can close this tab and return to Escort.")
-        if flow.capability in ("sheets", "slides", "drive_files"):
+        if flow.capability in ("sheets", "slides", "drive_browse", "drive_files"):
             _button, verb, _code = CAPABILITY_LABELS[flow.capability]
             if not self.can(flow.capability):
                 self.last_error = f"Google did not allow Escort to {verb}; tick the box on Google's consent screen"

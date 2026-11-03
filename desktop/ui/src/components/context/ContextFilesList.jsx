@@ -61,7 +61,11 @@ export default function ContextFilesList({ items, filter, onFilter, onRemove, dr
               const RowIcon = iconDef?.type === "brand" ? null : iconDef;
               return (
                 <li key={item.id} className="flex items-start gap-3 px-4 py-3.5 hover:bg-white/[0.03]">
-                  <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/[0.05] text-[#c6bfff] hairline">
+                  <span
+                    className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#c6bfff] hairline ${
+                      BrandLogo ? "bg-transparent" : "bg-white/[0.05]"
+                    }`}
+                  >
                     {BrandLogo ? <BrandLogo size={18} aria-hidden /> : RowIcon ? <RowIcon size={18} weight="duotone" aria-hidden /> : null}
                   </span>
                   <div className="min-w-0 flex-1">

@@ -150,18 +150,7 @@ function NextEvent({ event, ctx, refresh, go, className }) {
         </>
       )}
       <div className="mt-auto pt-6">
-        {items.length ? (
-          <ul className="flex flex-wrap gap-1.5">
-            {items.slice(0, 3).map((item) => (
-              <li key={item.id} className="max-w-full truncate rounded-full bg-white/[0.05] px-2.5 py-1 text-[11.5px] text-muted hairline">
-                <span className="text-[#c6bfff]">{item.source_label}</span> {item.title}
-              </li>
-            ))}
-            {items.length > 3 ? <li className="rounded-full px-1.5 py-1 text-[11.5px] text-faint">+{items.length - 3}</li> : null}
-          </ul>
-        ) : (
-          <p className="text-[12.5px] text-faint">No context loaded yet</p>
-        )}
+        {!items.length ? <p className="text-[12.5px] text-faint">No context loaded yet</p> : null}
         {event ? (
           <button type="button" onClick={review} disabled={busy} className="press mt-4 inline-flex items-center gap-1.5 text-[13px] font-medium text-[#c6bfff] hover:text-white disabled:opacity-50">
             {busy ? "Matching…" : "Review prep"}

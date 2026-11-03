@@ -36,7 +36,7 @@ export default function LiveIdle({ status, setListening, go, onOpenSession, busy
     return () => {
       alive = false;
     };
-  }, [projectId, status?.sessions]);
+  }, [projectId, status?.sessions, status?.listening]);
 
   async function goLive() {
     setBusy(true);

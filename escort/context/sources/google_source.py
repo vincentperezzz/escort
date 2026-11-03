@@ -40,7 +40,7 @@ MAX_SHEET_COLS = 30
 MAX_SHEET_TABS = 20
 UNSUPPORTED = (
     "Escort reads Google Docs, Sheets and Slides links. "
-    "For other Drive files (PDF, Word, text), use Pick from Drive."
+    "For other Drive files (PDF, Word, text), use Import from Google and search your Drive."
 )
 BAD_LINK = (
     "That does not look like a Google Docs, Sheets or Slides link. "

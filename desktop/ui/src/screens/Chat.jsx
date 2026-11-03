@@ -90,14 +90,6 @@ export default function Chat({ status, refresh, go, seed = "" }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-auto px-4 md:px-8">
         <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col">
-          {!empty ? (
-            <header className="sticky top-0 z-10 -mx-4 flex justify-center border-b border-white/[0.06] bg-bg/85 px-4 py-3 backdrop-blur-md md:-mx-8 md:px-8">
-              <span className="inline-flex max-w-full items-center gap-2 text-[13px] font-medium text-muted">
-                <Folder size={15} weight="fill" className="shrink-0 text-accent" aria-hidden />
-                <span className="truncate text-ink/90">{activeProj?.name || "Project"}</span>
-              </span>
-            </header>
-          ) : null}
           {empty ? (
             <EmptyHero prepEvent={prepEvent} onPick={send} activeProj={activeProj} />
           ) : (

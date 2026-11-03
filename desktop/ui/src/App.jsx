@@ -24,7 +24,9 @@ const NAV = [
 const LEGACY = { prd: ["context"], notes: ["context"], setup: ["settings", "connections"] };
 
 function parseRoute() {
-  const [rawName = "", sub = ""] = window.location.hash.replace(/^#\/?/, "").split("/");
+  const parts = window.location.hash.replace(/^#\/?/, "").split("/");
+  const rawName = parts[0] || "";
+  const sub = parts.slice(1).join("/");
   if (rawName === "recap") {
     const liveSub = sub ? `recap/${sub}` : "recap";
     return { name: "live", sub: liveSub };
@@ -137,7 +139,7 @@ function Shell({ route }) {
   }, [listening, status]);
   useEffect(() => {
     if (route.name !== "live") setJustEndedRecap(false);
-    else if (route.sub && !route.sub.startsWith("recap")) setJustEndedRecap(false);
+    else if (route.sub && !route.sub.startsWith("recap") && !route.sub.startsWith("session/")) setJustEndedRecap(false);
   }, [route.name, route.sub]);
 
   useFaviconState(listening);

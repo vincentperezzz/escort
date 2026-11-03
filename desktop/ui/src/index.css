@@ -413,25 +413,42 @@ html.overlay-mode * {
   }
 }
 
-.scroll-thin {
+*:not(.ov-stack) {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: transparent transparent;
 }
 
-.scroll-thin::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+*:not(.ov-stack):hover,
+*:not(.ov-stack):focus-within {
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
 
-.scroll-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+*:not(.ov-stack)::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*:not(.ov-stack)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*:not(.ov-stack)::-webkit-scrollbar-thumb {
+  background: transparent;
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
-.scroll-thin::-webkit-scrollbar-track {
-  background: transparent;
+*:not(.ov-stack):hover::-webkit-scrollbar-thumb,
+*:not(.ov-stack):focus-within::-webkit-scrollbar-thumb,
+*:not(.ov-stack)::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.12);
+  background-clip: padding-box;
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
 
 /* Overlay opacity slider */

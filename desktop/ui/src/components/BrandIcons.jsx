@@ -1,1 +1,7 @@
-export { GoogleMark as GoogleLogo, NotionMark as NotionLogo, BrandTile } from "./BrandMark.jsx";
+export {
+  GoogleMark as GoogleLogo,
+  GoogleDriveMark as GoogleDriveLogo,
+  NotionMark,
+  NotionLogo,
+  BrandTile,
+} from "./BrandMark.jsx";

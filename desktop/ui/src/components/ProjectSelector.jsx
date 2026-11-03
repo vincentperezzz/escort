@@ -81,7 +81,7 @@ export default function ProjectSelector({ status, refresh }) {
                 return (
                   <div
                     key={p.id}
-                    className={`group flex items-center justify-between rounded-xl px-2.5 py-2 text-sm transition-colors ${
+                    className={`group flex items-center gap-1 rounded-xl px-2.5 py-2 text-sm transition-colors focus-within:ring-1 focus-within:ring-white/10 ${
                       isSelected ? "bg-white/[0.09] text-ink" : "text-ink/80 hover:bg-white/[0.05]"
                     }`}
                   >
@@ -97,36 +97,44 @@ export default function ProjectSelector({ status, refresh }) {
                         <p className="truncate text-[13px] font-medium">{p.name}</p>
                         {p.description ? <p className="truncate text-[11px] text-muted">{p.description}</p> : null}
                       </div>
-                      {isSelected ? <Check size={14} className="shrink-0 text-accent" /> : null}
                     </button>
 
-                    <div className="ml-1 flex shrink-0 opacity-0 group-hover:opacity-100">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpen(false);
-                          setDialog({ mode: "edit", project: p });
-                        }}
-                        title="Edit project"
-                        aria-label={`Edit ${p.name}`}
-                        className="press grid h-7 w-7 place-items-center rounded-lg text-muted hover:bg-white/10 hover:text-ink"
-                      >
-                        <PencilSimple size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpen(false);
-                          setDeleteTarget(p);
-                        }}
-                        title="Delete project"
-                        aria-label={`Delete ${p.name}`}
-                        className="press grid h-7 w-7 place-items-center rounded-lg text-muted hover:bg-conflict-soft hover:text-conflict"
-                      >
-                        <Trash size={13} />
-                      </button>
+                    <div className="relative flex h-7 shrink-0 items-center">
+                      {isSelected ? (
+                        <Check
+                          size={14}
+                          className="shrink-0 text-accent group-hover:invisible group-focus-within:invisible"
+                          aria-hidden
+                        />
+                      ) : null}
+                      <div className="absolute right-0 flex items-center invisible group-hover:visible group-focus-within:visible">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpen(false);
+                            setDialog({ mode: "edit", project: p });
+                          }}
+                          title="Edit project"
+                          aria-label={`Edit ${p.name}`}
+                          className="press grid h-7 w-7 place-items-center rounded-lg text-muted hover:bg-white/10 hover:text-ink"
+                        >
+                          <PencilSimple size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpen(false);
+                            setDeleteTarget(p);
+                          }}
+                          title="Delete project"
+                          aria-label={`Delete ${p.name}`}
+                          className="press grid h-7 w-7 place-items-center rounded-lg text-muted hover:bg-conflict-soft hover:text-conflict"
+                        >
+                          <Trash size={13} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -134,19 +142,6 @@ export default function ProjectSelector({ status, refresh }) {
             </div>
 
             <div className="mt-1 space-y-0.5 border-t border-white/[0.08] pt-1">
-              {activeProj ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    setDeleteTarget(activeProj);
-                  }}
-                  className="press flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-[12.5px] font-medium text-conflict hover:bg-conflict-soft/40"
-                >
-                  <Trash size={14} aria-hidden />
-                  <span>Delete project…</span>
-                </button>
-              ) : null}
               <button
                 type="button"
                 onClick={() => {

@@ -119,7 +119,10 @@ class DesktopRuntime:
         if key and not os.environ.get("MODEL_API_KEY"):
             # Keychain survives restarts; Muse clients read the key from the environment.
             os.environ["MODEL_API_KEY"] = key
-        self.connectors = connectors or Connectors(self.secrets, client_id_getter=lambda: self.prefs.get("google_client_id"))
+        self.connectors = connectors or Connectors(
+            self.secrets,
+            client_id_getter=lambda: (str(self.prefs.get("google_client_id") or "").strip() or None),
+        )
         self.connectors.save_notes_getter = lambda: self.save_notes_enabled
         self.connectors.google.on_connected = self.show_main_window
         self.connectors.notion_mcp.on_connected = self.show_main_window

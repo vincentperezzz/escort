@@ -64,12 +64,14 @@ class FakeDrive:
             return self.exports.get(request.url.params["mimeType"]) or httpx.Response(400, json={"error": {"message": "Export only supports these types"}})
         if request.url.params.get("alt") == "media":
             return httpx.Response(200, content=self.media)
+        if request.url.path == "/drive/v3/files" and request.method == "GET":
+            return httpx.Response(200, json={"files": [self.meta]})
         if request.url.path == f"/drive/v3/files/{FILE_ID}":
             return httpx.Response(200, json=self.meta)
         return httpx.Response(404, json={"error": {"message": "not found"}})
 
 
-def _setup(scopes=(CAL, DOCS, DRIVE_FILE), fake=None, api_key=API_KEY, expires_in=3600.0):
+def _setup(scopes=(CAL, DOCS, DRIVE_READONLY), fake=None, api_key=API_KEY, expires_in=3600.0):
     fake = fake or FakeDrive({"id": FILE_ID, "name": "notes.txt", "mimeType": "text/plain", "size": "10"}, b"# Plan\nShip it")
     secrets = MemorySecretStore()
     secrets.set(google_auth.CLIENT_SECRET_KEY, CLIENT_SECRET)
@@ -195,8 +197,7 @@ def test_picker_config_refreshes_an_expiring_token(tmp_path):
 @pytest.mark.parametrize(
     "kwargs, reason",
     [
-        ({"scopes": None}, "demo"),  # auto mode serves demo data until Google is connected
-        ({"api_key": ""}, "no_api_key"),
+        ({"scopes": None}, "demo"),
         ({"scopes": (CAL, DOCS)}, "needs_consent"),
     ],
 )
@@ -220,20 +221,19 @@ def test_picker_config_refuses_foreign_origins(tmp_path):
     assert client.get("/api/google/picker-config", headers={"Origin": "http://127.0.0.1:5173"}).status_code == 200
 
 
-def test_drive_picking_consent_and_status(tmp_path):
+def test_drive_browse_consent_and_status(tmp_path):
     connectors, _fake, secrets = _setup(scopes=(CAL, DOCS))
     row = connectors.status()["providers"][0]
-    assert row["capabilities"]["pick_drive_files"] is False and row["consent"]["drive_files"] == "not_granted"
-    # Note saving's drive.file grant also covers picked files.
+    assert row["capabilities"]["browse_drive"] is False and row["consent"]["drive_browse"] == "not_granted"
     writer = _setup(scopes=(CAL, DOCS, *google_auth.WRITE_SCOPES))[0]
-    assert writer.status()["providers"][0]["capabilities"]["pick_drive_files"] is True
-    assert google_auth.PICKER_SCOPES == (DRIVE_FILE,) and DRIVE_READONLY not in google_auth.PICKER_SCOPES
+    assert writer.status()["providers"][0]["capabilities"]["browse_drive"] is True
+    assert google_auth.DRIVE_BROWSE_SCOPES == (DRIVE_READONLY,)
 
 
 # ---- import-drive-file ----------------------------------------------------------
 
 
-def _import(tmp_path, fake, scopes=(CAL, DOCS, DRIVE_FILE), body=None):
+def _import(tmp_path, fake, scopes=(CAL, DOCS, DRIVE_READONLY), body=None):
     connectors, _f, secrets = _setup(scopes=scopes, fake=fake)
     client = _client(tmp_path, connectors, secrets)
     return client.post("/api/context/import-drive-file", json=body or {"id": FILE_ID, "mimeType": "application/pdf", "name": "x"})
@@ -313,8 +313,8 @@ def test_missing_drive_file_scope_prompts_without_calling_drive(tmp_path):
     fake = FakeDrive({"id": FILE_ID, "name": "a.txt", "mimeType": "text/plain"})
     response = _import(tmp_path, fake, scopes=(CAL, DOCS))
     body = response.json()
-    assert response.status_code == 403 and body["code"] == "needs_drive_consent" and body["capability"] == "drive_files"
-    assert "Allow Drive file picking" in body["error"]
+    assert response.status_code == 403 and body["code"] == "needs_drive_consent" and body["capability"] == "drive_browse"
+    assert "Allow Drive access" in body["error"]
     assert not any("/drive/" in r.url.path for r in fake.requests)
 
 
@@ -335,7 +335,7 @@ def test_drive_errors_map_to_actionable_messages():
     fake.override = httpx.Response(404, json={"error": {"message": "File not found"}})
     with pytest.raises(ConnectorError) as missing:
         google_drive.fetch_drive_file(connectors.google, FILE_ID)
-    assert missing.value.code == "not_found" and "Pick it again" in str(missing.value)
+    assert missing.value.code == "not_found" and "not shared" in str(missing.value)
 
 
 def test_bad_file_id_and_empty_text(tmp_path):
@@ -350,6 +350,36 @@ def test_reimporting_the_same_file_refreshes_it(tmp_path):
     for _ in range(2):
         response = client.post("/api/context/import-drive-file", json={"id": FILE_ID, "mimeType": "text/plain", "name": "notes.txt"})
     assert [i["title"] for i in response.json()["context"]["items"]] == ["notes.txt"]
+
+
+def test_drive_search_lists_importable_files(tmp_path):
+    connectors, fake, secrets = _setup()
+    client = _client(tmp_path, connectors, secrets)
+    response = client.post("/api/context/search", json={"source": "google", "query": "notes"})
+    assert response.status_code == 200
+    hits = response.json()["hits"]
+    assert hits[0]["id"] == FILE_ID and hits[0]["title"] == "notes.txt"
+    assert any(r.url.path == "/drive/v3/files" for r in fake.requests)
+
+
+def test_drive_search_via_alias_source(tmp_path):
+    connectors, _fake, secrets = _setup()
+    client = _client(tmp_path, connectors, secrets)
+    assert client.post("/api/context/search", json={"source": "drive", "query": ""}).status_code == 200
+
+
+def test_context_import_google_uses_drive_file_fetch(tmp_path):
+    fake = FakeDrive({"id": FILE_ID, "name": "notes.txt", "mimeType": "text/plain", "size": "10"}, b"# Plan\nShip it")
+    connectors, _f, secrets = _setup(fake=fake)
+    client = _client(tmp_path, connectors, secrets)
+    item = client.post("/api/context/import", json={"source": "google", "external_id": FILE_ID}).json()["context"]["items"][0]
+    assert item["source_label"] == "Google Drive"
+
+
+def test_picker_config_ready_without_api_key(tmp_path):
+    connectors, _fake, secrets = _setup(api_key="")
+    body = _client(tmp_path, connectors, secrets).get("/api/google/picker-config").json()
+    assert body["ready"] is True and body["api_key"] is None and body["access_token"] == "at_1"
 
 
 def test_mock_mode_drive_import_is_labeled_demo(tmp_path, monkeypatch):

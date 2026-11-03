@@ -455,6 +455,7 @@ def test_status_contract_and_no_token_leak(tmp_path: Path):
             "needs_parent",
             "needs_capabilities",
             "has_api_key",
+            "needs_drive_consent",
             "consent",
             # Notion: one-click OAuth (MCP) vs pasted token, and the Reconnect prompt.
             "auth",
@@ -468,10 +469,11 @@ def test_status_contract_and_no_token_leak(tmp_path: Path):
         "read_docs": True,
         "read_sheets": False,
         "read_slides": False,
-        "pick_drive_files": False,
+        "browse_drive": True,
+        "pick_drive_files": True,
         "write_notes": False,
     }
-    assert google["consent"] == {"docs": "granted", "sheets": "not_granted", "slides": "not_granted", "drive_files": "not_granted", "notes": "not_granted"}
+    assert google["consent"] == {"docs": "granted", "sheets": "not_granted", "slides": "not_granted", "drive_browse": "granted", "notes": "not_granted"}
     assert google["needs_docs_consent"] is False
     assert google["save_notes"] is False and google["needs_consent"] is False
     assert google["connected"] is True and google["account"] == "me@example.com" and google["mode"] == "live" and google["configured"] is True

@@ -285,11 +285,10 @@ def test_consent_endpoint_asks_only_for_the_one_scope(tmp_path):
     connectors, _f, secrets = _setup(scopes=(CAL, DOCS))
     connectors.google._open_browser = opened.append
     client = _client(tmp_path, connectors, secrets)
-    for capability, scope in (("sheets", SHEETS), ("slides", SLIDES), ("drive_files", google_auth.DRIVE_FILE_SCOPE)):
+    for capability, scope in (("sheets", SHEETS), ("slides", SLIDES), ("drive_browse", DRIVE_READONLY)):
         out = client.post("/api/connectors/google/consent", json={"capability": capability}).json()
         query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(out["auth_url"]).query))
         assert query["scope"].split() == [scope] and query["include_granted_scopes"] == "true"
-        assert DRIVE_READONLY not in query["scope"]
         row = client.get("/api/connectors/status").json()["providers"][0]
         assert row["consent"][capability] == "pending"
     connectors.google.cancel()
@@ -314,13 +313,13 @@ def test_callback_reports_a_declined_capability():
 
 
 def test_capabilities_and_base_scopes():
-    assert set(google_auth.SCOPES) == {CAL, DOCS}  # Sheets/Slides never join the base sign-in
+    assert set(google_auth.SCOPES) == {CAL, DOCS, DRIVE_READONLY}
     connectors, _f, _s = _setup(scopes=(CAL, DOCS, SHEETS))
     row = connectors.status()["providers"][0]
     assert row["capabilities"]["read_sheets"] is True and row["capabilities"]["read_slides"] is False
     assert row["consent"]["sheets"] == "granted" and row["consent"]["slides"] == "not_granted"
     assert row["needs_docs_consent"] is False
-    for scopes in (google_auth.SCOPES, google_auth.SHEETS_SCOPES, google_auth.SLIDES_SCOPES, google_auth.PICKER_SCOPES, google_auth.WRITE_SCOPES):
+    for scopes in (google_auth.SHEETS_SCOPES, google_auth.SLIDES_SCOPES, google_auth.PICKER_SCOPES, google_auth.WRITE_SCOPES):
         assert DRIVE_READONLY not in scopes
 
 

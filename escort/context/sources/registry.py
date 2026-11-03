@@ -21,6 +21,7 @@ import httpx
 from escort.context.mock_data import (
     mock_calendar,
     mock_drive_file,
+    mock_drive_hits,
     mock_google_link,
     mock_import_item,
     mock_notion_hits,
@@ -39,7 +40,7 @@ from escort.context.sources.google_auth import (
     WRITE_SCOPES,
     GoogleAuth,
 )
-from escort.context.sources.google_drive import fetch_drive_file
+from escort.context.sources.google_drive import fetch_drive_file, search_drive_files
 from escort.context.sources.google_source import (
     fetch_google_link,
     list_calendar_events,
@@ -49,7 +50,7 @@ from escort.context.sources.google_source import (
 from escort.context.sources.notion_mcp import NotionMcp
 from escort.context.sources.notion_source import NotionClient
 
-CONSENT_CAPABILITIES = ("docs", "sheets", "slides", "drive_files", "notes")
+CONSENT_CAPABILITIES = ("docs", "sheets", "slides", "drive_browse", "notes")
 
 MODES = ("auto", "live", "mock")
 CALENDAR_TTL_S = 60.0
@@ -136,11 +137,19 @@ class Connectors:
     ) -> None:
         self.secrets = secrets
         self.http = http or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True)
-        self.google = GoogleAuth(secrets, self.http, client_id_getter=client_id_getter, open_browser=open_browser, bundled_path=bundled_path, user_path=user_path)
-        self.notion = NotionClient(secrets, self.http)  # pasted integration token (REST), the fallback
         from escort.context.sources.notion_mcp import launch_auth_window
+
         browser_launcher = open_browser if open_browser is not None else launch_auth_window
-        self.notion_mcp = NotionMcp(secrets, self.http, open_browser=browser_launcher)  # one-click OAuth (MCP)
+        self.google = GoogleAuth(
+            secrets,
+            self.http,
+            client_id_getter=client_id_getter,
+            open_browser=browser_launcher,
+            bundled_path=bundled_path,
+            user_path=user_path,
+        )
+        self.notion = NotionClient(secrets, self.http)
+        self.notion_mcp = NotionMcp(secrets, self.http, open_browser=browser_launcher)
         self.generation = 0
         self.google.on_change = self._bump
         self.notion.on_change = self._bump
@@ -189,14 +198,16 @@ class Connectors:
             )
         elif connected and pending_capability == "notes":
             hint = "Finish allowing note saving in your browser."
-        elif connected and pending_capability in ("sheets", "slides", "drive_files"):
+        elif connected and pending_capability in ("sheets", "slides", "drive_browse", "drive_files"):
             hint = "Finish allowing access in your browser."
         elif connected and not self.google.can_read_docs():
             hint = "Connected for Calendar. Allow Docs access to import Google Docs links."
+        elif connected and not self.google.can("drive_browse"):
+            hint = "Connected for Calendar. Reconnect to grant Drive access and import files from your Drive."
         elif connected and self.google.has_scopes(WRITE_SCOPES):
-            hint = "Connected. Escort reads Calendar and the Google links you paste or files you pick, and writes only to the Google Docs it creates."
+            hint = "Connected. Escort reads Calendar, Google Docs links, and Drive files, and writes only to the Google Docs it creates."
         elif connected:
-            hint = "Connected. Escort reads upcoming Calendar events, the Google Docs, Sheets and Slides links you paste, and the Drive files you pick (read-only)."
+            hint = "Connected. Escort reads Calendar events, Google Docs, Sheets, Slides, and Drive files you import (read-only)."
         elif self.google.pending():
             hint = "Finish signing in with Google in your browser."
         else:
@@ -225,13 +236,15 @@ class Connectors:
             "has_client_secret": bool(self.google.client_secret()),
             # The Drive file chooser needs a browser API key from the same Cloud project; never returned here.
             "has_api_key": bool(self.google.api_key()),
+            "needs_drive_consent": connected and not self.google.can("drive_browse"),
             "setup_hint": hint,
             "capabilities": {
                 "read": True,
                 "read_docs": read_docs,
                 "read_sheets": self.google.can("sheets"),
                 "read_slides": self.google.can("slides"),
-                "pick_drive_files": self.google.can("drive_files"),
+                "browse_drive": self.google.can("drive_browse"),
+                "pick_drive_files": self.google.can("drive_browse"),
                 "write_notes": write_notes,
             },
             # Per capability: granted | pending | not_granted. Sheets, Slides and Drive picking are asked
@@ -297,11 +310,13 @@ class Connectors:
     def connect_google(self, open_browser: bool = True, notes: bool = False, capability: str | None = None) -> dict[str, str]:
         """Sign in (Calendar + read Docs), or add one capability on top with incremental consent.
 
-        capability: "notes" (drive.file + documents), "sheets", "slides", "drive_files" (drive.file),
-        or "docs" (the base sign-in again: how an older token gains documents.readonly).
+        capability: "notes" (drive.file + documents), "sheets", "slides", "drive_browse" (drive.readonly),
+        "drive_files" (alias), or "docs" (the base sign-in again: how an older token gains documents.readonly).
         """
         if notes:
             capability = "notes"
+        if capability == "drive_files":
+            capability = "drive_browse"
         if capability == "notes":
             scopes: tuple[str, ...] | None = WRITE_SCOPES
         elif capability in (None, "docs", "signin"):
@@ -313,18 +328,13 @@ class Connectors:
         return {"auth_url": self.google.begin(open_browser=open_browser, scopes=scopes)}
 
     def picker_config(self) -> dict[str, Any]:
-        """What the UI needs to open Google's Drive file chooser. Never includes the client secret.
-
-        The access token is a short-lived drive.file-capable token, returned only when every piece
-        is in place; `reason` says what is missing otherwise.
-        """
         google = self.google
         out: dict[str, Any] = {
             "mode": self.provider_mode("google"),
             "api_key": None,
             "app_id": google.app_id(),
             "access_token": None,
-            "scope_ok": google.can("drive_files"),
+            "scope_ok": google.can("drive_browse"),
             "ready": False,
             "reason": None,
         }
@@ -332,16 +342,14 @@ class Connectors:
             out["reason"] = "demo"
         elif not google.connected():
             out["reason"] = "not_connected"
-        elif not google.api_key():
-            out["reason"] = "no_api_key"
-        elif not out["app_id"]:
-            out["reason"] = "no_app_id"
         elif not out["scope_ok"]:
             out["reason"] = "needs_consent"
         if out["reason"]:
             return out
-        out["api_key"] = google.api_key()
-        out["access_token"] = google.access_token()  # refreshed here when it is about to expire
+        key = google.api_key()
+        if key:
+            out["api_key"] = key
+        out["access_token"] = google.access_token()
         out["ready"] = True
         return out
 
@@ -418,12 +426,38 @@ class NotionSource:
         return []
 
 
+class GoogleDriveSource:
+    name = "google"
+    label = "Google Drive"
+
+    def __init__(self, connectors: Connectors) -> None:
+        self.connectors = connectors
+
+    def connected(self) -> bool:
+        return self.connectors.google.connected()
+
+    def mode(self) -> str:
+        return self.connectors.provider_mode("google")
+
+    def search(self, query: str, limit: int = 8) -> list[dict]:
+        if self.mode() == "mock":
+            return _label_mock(_filter_hits(mock_drive_hits(), query, limit))
+        if not self.connected():
+            return []
+        return search_drive_files(self.connectors.google, query, limit)
+
+    def fetch(self, external_id: str) -> ContextItem:
+        if self.mode() == "mock":
+            return mock_drive_file(external_id, "")
+        if not self.connected():
+            raise ConnectorAuthError("google", "Google is not connected")
+        return fetch_drive_file(self.connectors.google, external_id)
+
+    def list_upcoming_events(self, limit: int = 5) -> list[CalendarEvent]:
+        return []
+
+
 class GoogleDocsSource:
-    """Import a Google Doc, Sheet or Slides deck from a pasted link (or a bare id of `default_kind`).
-
-    There is no Drive search: no Drive-wide scope is ever requested.
-    """
-
     name = "google_docs"
     label = "Google Docs"
 
@@ -506,10 +540,12 @@ class CalendarSource:
 def build_sources(connectors: Connectors | Callable[[str], str | None]) -> dict[str, ContextSource]:
     if not isinstance(connectors, Connectors):
         connectors = Connectors.from_getter(connectors)
+    drive = GoogleDriveSource(connectors)
     return {
         "notion": NotionSource(connectors),
+        "google": drive,
+        "drive": drive,
         "google_docs": GoogleDocsSource(connectors),
-        # Same importer; only a bare id (no link to detect the type from) differs.
         "google_sheets": GoogleDocsSource(connectors, "sheets"),
         "google_slides": GoogleDocsSource(connectors, "slides"),
         "google_calendar": CalendarSource(connectors),

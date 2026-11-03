@@ -7,7 +7,7 @@ import {
   MagnifyingGlass,
   ShieldCheck,
 } from "@phosphor-icons/react";
-import { BrandTile, GoogleLogo, NotionLogo } from "./BrandIcons.jsx";
+import { BrandTile, GoogleLogo, NotionLogo, NotionMark } from "./BrandIcons.jsx";
 import { Button, Pill, Toggle } from "./ui.jsx";
 import { post } from "../lib/api.js";
 import { useConnectors } from "../lib/useConnectors.js";
@@ -36,7 +36,7 @@ const META = {
   notion: {
     name: "Notion",
     scope: "The pages you choose",
-    Mark: NotionLogo,
+    Mark: NotionMark,
     blurb: "Connect your own workspace. Escort reads, and when you ask, updates only the pages you pick.",
     steps: [
       "Press Connect Notion. Notion opens in your browser.",

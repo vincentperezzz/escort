@@ -1,9 +1,7 @@
-"""Import one file the user picked in Google's Drive file chooser (Picker).
+"""Import Google Drive files via the Drive REST API (drive.readonly).
 
-Uses only drive.file: Google grants Escort access to exactly the files picked with its App ID,
-nothing else in Drive. Binary files (PDF, DOCX, TXT, MD) are downloaded with files.get?alt=media
-and run through the same extractor as uploads; Google-native Docs, Sheets and Slides are
-exported to text first.
+Binary files (PDF, DOCX, TXT, MD) download with files.get?alt=media; Google-native Docs,
+Sheets and Slides export to text first.
 """
 
 from __future__ import annotations
@@ -43,8 +41,29 @@ BINARY_TYPES = {
     "text/x-markdown": ".md",
 }
 SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".md", ".txt")
+IMPORTABLE_MIMES = (
+    GOOGLE_DOC,
+    GOOGLE_SHEET,
+    GOOGLE_SLIDES,
+    "application/pdf",
+    DOCX_MIME,
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+)
+MIME_LABELS = {
+    GOOGLE_DOC: "Google Doc",
+    GOOGLE_SHEET: "Google Sheet",
+    GOOGLE_SLIDES: "Google Slides",
+    "application/pdf": "PDF",
+    DOCX_MIME: "Word document",
+    "text/plain": "Text file",
+    "text/markdown": "Markdown",
+    "text/x-markdown": "Markdown",
+}
 UNSUPPORTED = "Escort reads PDF, Word (.docx), text and Markdown files, and Google Docs, Sheets and Slides. That file is a different type."
 _FILE_ID = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
+SEARCH_PAGE_SIZE = 30
 
 
 def _too_large(size: int) -> ConnectorSetupError:
@@ -72,17 +91,67 @@ def csv_to_markdown(text: str) -> str:
     return "\n".join(lines)
 
 
+def _drive_query(text: str) -> str:
+    mime_filter = " or ".join(f"mimeType='{mime}'" for mime in IMPORTABLE_MIMES)
+    parts = [f"trashed=false and ({mime_filter})"]
+    cleaned = (text or "").strip()
+    if cleaned:
+        escaped = cleaned.replace("\\", "\\\\").replace("'", "\\'")
+        parts.append(f"name contains '{escaped}'")
+    return " and ".join(parts)
+
+
+def search_drive_files(auth: GoogleAuth, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    auth.require("drive_browse")
+    capped = max(1, min(limit, 50))
+    hits: list[dict[str, Any]] = []
+    page_token: str | None = None
+    while len(hits) < capped:
+        params: dict[str, str] = {
+            "q": _drive_query(query),
+            "pageSize": str(min(SEARCH_PAGE_SIZE, capped - len(hits))),
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,description)",
+            "orderBy": "modifiedTime desc",
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        payload = _call(auth, DRIVE_FILES_URL, params).json()
+        for raw in payload.get("files") or []:
+            if not isinstance(raw, dict):
+                continue
+            file_id = str(raw.get("id") or "")
+            title = str(raw.get("name") or "Untitled")
+            mime = str(raw.get("mimeType") or "")
+            snippet = str(raw.get("description") or "").strip() or MIME_LABELS.get(mime, mime)
+            hits.append(
+                {
+                    "id": file_id,
+                    "title": title,
+                    "snippet": snippet,
+                    "mimeType": mime,
+                    "modified": str(raw.get("modifiedTime") or ""),
+                }
+            )
+            if len(hits) >= capped:
+                break
+        page_token = str(payload.get("nextPageToken") or "") or None
+        if not page_token:
+            break
+    return hits[:capped]
+
+
 def _call(auth: GoogleAuth, url: str, params: dict[str, str]) -> Any:
-    """Drive GET with picker-specific error wording."""
     try:
         return auth.request("GET", url, params=params)
     except ConnectorScopeError as err:
-        raise consent_error("drive_files") from err
+        raise consent_error("drive_browse") from err
     except ConnectorError as err:
         if err.code == "not_found":
             raise ConnectorError(
                 PROVIDER,
-                "Google could not find that file, or Escort was not given access to it. Pick it again from Drive.",
+                "Google could not find that file, or it is not shared with the Google account Escort is connected to.",
                 code="not_found",
             ) from err
         if err.code == "permission_denied":
@@ -110,11 +179,10 @@ def _export(auth: GoogleAuth, file_id: str, mimes: tuple[str, ...]) -> bytes:
 
 
 def fetch_drive_file(auth: GoogleAuth, file_id: str, mime_hint: str = "", name_hint: str = "") -> ContextItem:
-    """Download (or export) one picked file and turn it into a 'Google Drive' context item."""
     file_id = (file_id or "").strip()
     if not _FILE_ID.match(file_id):
-        raise ConnectorSetupError(PROVIDER, "That is not a Google Drive file id. Pick the file again.", code="bad_request")
-    auth.require("drive_files")
+        raise ConnectorSetupError(PROVIDER, "That is not a Google Drive file id.", code="bad_request")
+    auth.require("drive_browse")
     meta = _call(
         auth,
         f"{DRIVE_FILES_URL}/{file_id}",

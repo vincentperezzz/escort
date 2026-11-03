@@ -114,6 +114,27 @@ def mock_google_link(kind: str, file_id: str) -> ContextItem:
     )
 
 
+def mock_drive_hits() -> list[dict]:
+    return [
+        {
+            "id": "docs_sow",
+            "title": "BayaniPay SOW (demo)",
+            "snippet": "Google Doc",
+            "mimeType": "application/vnd.google-apps.document",
+            "modified": "2026-11-01T12:00:00.000Z",
+            "mock": True,
+        },
+        {
+            "id": "docs_kyc",
+            "title": "KYC checklist (demo)",
+            "snippet": "Google Doc",
+            "mimeType": "application/vnd.google-apps.document",
+            "modified": "2026-10-28T09:00:00.000Z",
+            "mock": True,
+        },
+    ]
+
+
 def mock_drive_file(file_id: str, name: str = "") -> ContextItem:
     """Demo mode: a picked Drive file becomes the fictional BayaniPay doc, labeled mock."""
     item = mock_import_item("google_drive", "docs_sow")

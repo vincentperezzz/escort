@@ -143,7 +143,7 @@ def test_parse_doc_link_rejects_everything_else_clearly(text, code):
     assert caught.value.code == code
     if code == "unsupported_link" and "d/e/" not in text:
         assert "Escort reads Google Docs, Sheets and Slides links" in str(caught.value)
-        assert "Pick from Drive" in str(caught.value)
+        assert "Import from Google" in str(caught.value)
 
 
 # ---- documents.get -> sections ----------------------------------------------
@@ -262,25 +262,13 @@ def test_unsupported_link_over_http_is_a_400_with_the_clear_message(tmp_path):
 # ---- scope model and status -------------------------------------------------
 
 
-def test_base_and_write_scope_sets_never_include_drive_readonly():
-    assert set(google_auth.SCOPES) == {CAL_READ, DOCS_READ}
+def test_base_sign_in_includes_drive_readonly():
+    assert set(google_auth.SCOPES) == {CAL_READ, DOCS_READ, DRIVE_READONLY}
     assert set(google_auth.WRITE_SCOPES) == {"https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/documents"}
     connectors, _fake, _s = _setup(scopes=None)
-    for scopes in (None, google_auth.WRITE_SCOPES):
-        flow = connectors.google.prepare("http://127.0.0.1:5555/", scopes=scopes)
-        requested = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(flow.auth_url).query))["scope"].split()
-        assert DRIVE_READONLY not in requested
-    assert DRIVE_READONLY not in " ".join(google_auth.SCOPES + google_auth.WRITE_SCOPES)
-
-
-def test_code_and_docs_never_mention_the_restricted_drive_scope():
-    root = Path(__file__).resolve().parents[1]
-    offenders = []
-    for base, patterns in (("escort", ("*.py",)), ("desktop/ui/src", ("*.js", "*.jsx")), (".", ("README.md",))):
-        for pattern in patterns:
-            files = (root / base).glob(pattern) if base == "." else (root / base).rglob(pattern)
-            offenders += [str(path) for path in files if "drive.readonly" in path.read_text(encoding="utf-8", errors="ignore")]
-    assert offenders == []
+    flow = connectors.google.prepare("http://127.0.0.1:5555/", scopes=google_auth.WRITE_SCOPES)
+    requested = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(flow.auth_url).query))["scope"].split()
+    assert DRIVE_READONLY not in requested
 
 
 def test_status_capabilities_for_new_and_older_tokens():
@@ -307,7 +295,7 @@ def test_reconnect_asks_for_the_base_scopes_and_hints_the_account():
     old = _setup(scopes=(CAL_READ,))[0]
     flow = old.google.prepare("http://127.0.0.1:5555/")
     query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(flow.auth_url).query))
-    assert set(query["scope"].split()) == {CAL_READ, DOCS_READ}
+    assert set(query["scope"].split()) == {CAL_READ, DOCS_READ, DRIVE_READONLY}
     assert query["login_hint"] == "me@example.com" and query["include_granted_scopes"] == "true"
 
 

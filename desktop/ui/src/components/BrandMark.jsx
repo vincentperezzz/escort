@@ -20,6 +20,29 @@ export function NotionMark({ size = 20, className = "" }) {
   );
 }
 
+export function GoogleDriveMark({ size = 20, className = "" }) {
+  return (
+    <svg viewBox="0 0 87.3 78" width={size} height={size} className={className} aria-hidden="true">
+      <path fill="#0066DA" d="M6.3 66.1h58.5L29.7 9.6 6.3 66.1z" />
+      <path fill="#00AC47" d="M29.7 9.6L52.2 53.8H87.3L64.8 9.6H29.7z" />
+      <path fill="#EA4335" d="M87.3 53.8L81 66.1H58.5L52.2 53.8h35.1z" />
+      <path fill="#00832D" d="M29.7 9.6L6.3 53.8l6.3 12.3L29.7 9.6z" />
+      <path fill="#2684FC" d="M52.2 53.8L43.6 36.8 31 53.8h21.2z" />
+      <path fill="#FFBA00" d="M64.8 9.6L52.2 53.8h21.1L87.3 53.8 64.8 9.6z" />
+    </svg>
+  );
+}
+
+export function NotionLogo({ size = 16 }) {
+  const tile = Math.max(18, Math.round(size * 1.125));
+  const mark = Math.max(12, Math.round(size * 0.82));
+  return (
+    <BrandTile size={tile}>
+      <NotionMark size={mark} />
+    </BrandTile>
+  );
+}
+
 /** White rounded tile that holds a brand mark, so the marks read on the dark glass cards. */
 export function BrandTile({ children, size = 40 }) {
   return (

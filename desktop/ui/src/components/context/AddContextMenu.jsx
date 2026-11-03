@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretDown, FileArrowUp, FolderSimple, NotePencil, Plus } from "@phosphor-icons/react";
-import { GoogleLogo, NotionLogo } from "../BrandIcons.jsx";
+import { GoogleDriveLogo, NotionLogo } from "../BrandIcons.jsx";
 import { Button } from "../ui.jsx";
 
 const OPTIONS = [
   { id: "notion", label: "Notion", Logo: NotionLogo },
-  { id: "google", label: "Google", Logo: GoogleLogo },
+  { id: "google", label: "Google Drive", Logo: GoogleDriveLogo },
   { id: "folder", label: "Local folder sync", Icon: FolderSimple },
   { id: "upload", label: "Upload files", Icon: FileArrowUp },
   { id: "note", label: "Paste note", Icon: NotePencil },
