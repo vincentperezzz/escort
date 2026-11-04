@@ -543,9 +543,11 @@ class CalendarSource:
                     raise
             self._cache = (now, cache_key, events)
             hook = self.on_events_fetched
-            if hook and events:
-                hook(list(events))
-            return events[:limit]
+        # The hook takes the runtime lock; calling it while holding the cache lock would let every
+        # /api/status poll queue behind whoever holds that lock.
+        if hook and events:
+            hook(list(events))
+        return events[:limit]
 
 
 def build_sources(connectors: Connectors | Callable[[str], str | None]) -> dict[str, ContextSource]:

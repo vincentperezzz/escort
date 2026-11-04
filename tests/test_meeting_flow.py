@@ -724,3 +724,51 @@ def test_summary_is_useful_even_for_an_empty_meeting(tmp_path):
     summary = _wait_summary(runtime)
     assert summary["status"] == "ready"
     assert summary["bullets"] == ["No speech was transcribed in this meeting."]
+
+
+def test_delete_meeting_keeps_the_projects_context_items(tmp_path, no_real_capture_or_keys):
+    runtime = _runtime(tmp_path)
+    runtime.context.add_paste("# Scope\nNo QR payments in Phase 1.\n", title="Scope")
+    runtime.store.add_utterance(speaker="Them", text="hello", start_ms=0, end_ms=1, finished_at=0.0)
+    runtime.delete_meeting()
+    assert runtime.store.utterances == []
+    assert [item.title for item in runtime.context.items()] == ["Scope"]
+    # the next meeting still checks lines against the project's docs
+    runtime.context.apply_to_store(runtime.store)
+    assert runtime.store.prd_sections
+
+
+def test_status_is_not_blocked_while_muse_chat_is_in_flight(tmp_path, monkeypatch, no_real_capture_or_keys):
+    runtime = _runtime(tmp_path)
+    # An uncached calendar fetch makes /api/status fire the hook that takes the runtime lock.
+    runtime.context.sources["google_calendar"].ttl_s = 0
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_prep_chat(*_args, **_kwargs):
+        entered.set()
+        release.wait(10)
+        return "ok"
+
+    monkeypatch.setattr("escort.desktop.runtime.prep_chat", slow_prep_chat)
+    chat = threading.Thread(target=runtime.context_chat, args=("what did she just say?",), daemon=True)
+    chat.start()
+    assert entered.wait(5)
+    result: dict = {}
+    status = threading.Thread(target=lambda: result.update(runtime.public_status()), daemon=True)
+    status.start()
+    status.join(3)
+    release.set()
+    chat.join(5)
+    assert not status.is_alive(), "/api/status stalled behind the Muse call"
+    assert result
+
+
+def test_calendar_hook_runs_outside_the_cache_lock():
+    from escort.context.sources.registry import CalendarSource, Connectors
+
+    source = CalendarSource(Connectors.from_getter(lambda _key: None))
+    source.connectors.provider_mode = lambda _name: "mock"
+    held: list[bool] = []
+    source.on_events_fetched = lambda _events: held.append(source._lock.locked())
+    assert source.list_upcoming_events(3)
+    assert held == [False]

@@ -90,3 +90,33 @@ def test_sync_local_folder(tmp_path: Path):
     assert "sow" in titles
     assert "extra" in titles
 
+
+def test_resync_local_folder_updates_items_in_place(tmp_path: Path):
+    folder = tmp_path / "client_notes"
+    folder.mkdir()
+    (folder / "sow.md").write_text("# SOW\nNext-day settlement.\n", encoding="utf-8")
+
+    mgr = ProjectManager(tmp_path)
+    proj = mgr.create_project(name="Bayani", description="Notes")
+    mgr.update_project(proj.id, {"folder_path": str(folder)})
+    ctx = ContextLibrary(mgr.get_project_dir(proj.id), lambda k: None)
+
+    mgr.sync_local_folder(proj.id, ctx)
+    first_id = ctx.items()[0].id
+    (folder / "sow.md").write_text("# SOW\nSame-day settlement.\n", encoding="utf-8")
+    mgr.sync_local_folder(proj.id, ctx)
+
+    items = ctx.items()
+    assert [it.id for it in items] == [first_id]
+    assert "Same-day" in items[0].sections[0].body
+
+
+def test_library_drops_duplicate_ids_on_load(tmp_path: Path):
+    ctx = ContextLibrary(tmp_path, lambda k: None)
+    ctx.add_paste("# A\nfirst\n", title="A")
+    raw = ctx.data["items"][0]
+    ctx.data["items"] = [{**raw, "title": "stale"}, {**raw, "title": "latest"}]
+    ctx._save()
+
+    reloaded = ContextLibrary(tmp_path, lambda k: None)
+    assert [it.title for it in reloaded.items()] == ["latest"]

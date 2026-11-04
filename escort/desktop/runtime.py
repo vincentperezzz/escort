@@ -604,17 +604,31 @@ class DesktopRuntime:
                 answer = settings_reply.reply
                 changed = settings_reply.changed
                 self._chat_pending = settings_reply.pending
+                model_call = None
             else:
                 meeting_note, frame_path = self._meeting_chat_context()
-                answer = prep_chat(
-                    message,
-                    self.context.combined_markdown(),
-                    self.context.chat_history(),
+                model_call = dict(
+                    message=message,
+                    prd_text=self.context.combined_markdown(),
+                    history=self.context.chat_history(),
                     settings_note=describe_settings(self),
                     settings=self._settings(),
                     meeting_note=meeting_note,
                     frame_path=frame_path,
                 )
+        if model_call is not None:
+            # The Muse call is a blocking network request: snapshot state under the lock, call outside it,
+            # so /api/status and the capture threads are never held up behind it.
+            answer = prep_chat(
+                model_call["message"],
+                model_call["prd_text"],
+                model_call["history"],
+                settings_note=model_call["settings_note"],
+                settings=model_call["settings"],
+                meeting_note=model_call["meeting_note"],
+                frame_path=model_call["frame_path"],
+            )
+        with self._lock:
             self.context.append_chat("assistant", answer, changed=changed or None)
         return {"reply": answer, "changed": changed, "context": self.context.public_view()}
 
@@ -1201,7 +1215,6 @@ class DesktopRuntime:
             self.live = None
             self.meeting_id = new_id("mtg")
             self.store.delete_meeting()
-            self.context.clear()
         self._set_overlay_visible(False, bring_main=True)
         self._notify()
         return self.public_status()

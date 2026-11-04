@@ -38,6 +38,22 @@ class ContextLibrary:
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             self.data = {"items": [], "prep": {}, "chat": []}
+        raw_items = self.data.get("items")
+        if isinstance(raw_items, list):
+            # Earlier re-syncs appended instead of updating; keep the latest copy of each id.
+            latest = {raw.get("id"): raw for raw in raw_items if isinstance(raw, dict) and raw.get("id")}
+            seen: set[Any] = set()
+            unique = []
+            for raw in raw_items:
+                key = raw.get("id") if isinstance(raw, dict) else None
+                if key is None:
+                    unique.append(raw)
+                elif key not in seen:
+                    seen.add(key)
+                    unique.append(latest[key])
+            if len(unique) != len(raw_items):
+                self.data["items"] = unique
+                self._save()
         chat = self.data.get("chat")
         if isinstance(chat, list):
             cleaned = [
@@ -64,7 +80,13 @@ class ContextLibrary:
 
     def add_item(self, item: ContextItem) -> ContextItem:
         raw_items = self.data.setdefault("items", [])
-        raw_items.append(item.to_dict())
+        # An id already in the library is updated in place (a re-sync), never listed twice.
+        for index, raw in enumerate(raw_items):
+            if raw.get("id") == item.id:
+                raw_items[index] = item.to_dict()
+                break
+        else:
+            raw_items.append(item.to_dict())
         self._save()
         return item
 
