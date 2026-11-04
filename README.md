@@ -4,6 +4,8 @@
 
 **One place for all your scattered notes, and an AI that speaks up while the meeting is still running.**
 
+**[Watch the 2-minute demo on YouTube](https://youtu.be/H5PapUohBjc)**
+
 Your notes live everywhere: PDFs, files and folders on your computer, Google Drive, Notion, a scrap in Notepad. Escort collects them per project, then sits beside your call as a small overlay. It listens to both sides, watches the shared screen, and checks what is said against everything you gave it. When something doesn't line up, you get a heads-up right then, while you can still ask about it.
 
 No bot joins the call. Raw audio is never stored.
