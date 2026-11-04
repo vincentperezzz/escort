@@ -1,7 +1,7 @@
 {
   "name": "escort-overlay",
   "productName": "EscortOverlay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Escort's in-meeting overlay: a transparent, always-on-top Electron window that renders #/overlay from the local Escort service.",
   "main": "main.js",
