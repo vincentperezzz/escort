@@ -1,5 +1,5 @@
 #define AppName "Escort"
-#define AppVersion "0.1.1"
+#define AppVersion "0.1.0"
 #define AppPublisher "Escort"
 #define DistDir "..\dist\Escort"
 ; The Electron overlay is packaged by `npm run package` in overlay/, not by PyInstaller.

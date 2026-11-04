@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "escort"
-version = "0.1.1"
+version = "0.1.0"
 description = "Escort: a live scope-creep guard for Taglish client calls. Not a recorder."
 readme = "README.md"
 requires-python = ">=3.11"
