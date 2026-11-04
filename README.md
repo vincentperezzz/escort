@@ -1,3 +1,5 @@
+![Escort - your meeting escort, powered by Muse](docs/escort-banner.jpg)
+
 # Escort
 
 **One place for all your scattered notes, and an AI that speaks up while the meeting is still running.**
@@ -223,3 +225,7 @@ Fallbacks are labeled, never disguised: the rules engine labels its cards `rules
 
 - Embed the kept visuals as images in Google Docs and Notion exports (only their captions are exported today).
 - A signed installer.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
